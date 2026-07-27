@@ -15,6 +15,8 @@ import com.vcam.utils.RootManager
 import com.vcam.utils.VcplaxEngine
 import kotlinx.coroutines.*
 import org.json.JSONObject
+import android.util.Base64
+import java.io.File
 
 class VCamService : Service() {
 
@@ -23,6 +25,7 @@ class VCamService : Service() {
         const val ACTION_STOP           = "com.vcam.ACTION_STOP"
         const val ACTION_ENABLE_LINK    = "com.vcam.ACTION_ENABLE_LINK"
         const val ACTION_DISABLE_LINK   = "com.vcam.ACTION_DISABLE_LINK"
+        const val ACTION_START_BRIDGE  = "com.vcam.ACTION_START_BRIDGE"
         const val EXTRA_MEDIA_URI       = "extra_media_uri"
         const val EXTRA_MEDIA_PATH      = "extra_media_path"
         const val EXTRA_TARGET_PACKAGE  = "extra_target_package"
@@ -36,6 +39,9 @@ class VCamService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
     private var injector: CameraInjector? = null
     private var connectServer: ConnectServer? = null
+    private var bridgeInjectionStarted = false
+    private val bridgeFrameFile: File
+        get() = File(cacheDir, "bridg/obs_frame.jpg")
 
     /** Receives rotation / mirror / slot / zoom / scale / pan commands from FloatWindowService */
     private val controlReceiver = object : BroadcastReceiver() {
@@ -153,6 +159,7 @@ class VCamService : Service() {
             }
             ACTION_STOP -> {
                 stopInjection()
+                bridgeInjectionStarted = false
                 stopFloatWindow()
                 stopConnectServer()
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -161,11 +168,26 @@ class VCamService : Service() {
             ACTION_ENABLE_LINK -> {
                 ConnectServer.setEnabled(this, true)
                 startConnectServer()
+                startForeground(
+                    NOTIFICATION_ID,
+                    buildNotification("OBS Bridge", false, "Waiting for Bridg frames…")
+                )
             }
             ACTION_DISABLE_LINK -> {
                 ConnectServer.setEnabled(this, false)
                 stopConnectServer()
+                if (bridgeInjectionStarted) {
+                    stopInjection()
+                    bridgeInjectionStarted = false
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } else if (injector == null) {
+                    // If Bridg was enabled but no first frame arrived yet,
+                    // release the foreground service notification as well.
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
             }
+            ACTION_START_BRIDGE -> startBridgeInjection()
         }
         return START_STICKY
     }
@@ -237,6 +259,37 @@ class VCamService : Service() {
         injector = null
     }
 
+    /**
+     * Start the existing root/V4L2 injection pipeline with a live source.
+     * Bridg replaces this JPEG atomically for every incoming OBS frame.
+     */
+    private fun startBridgeInjection() {
+        if (bridgeInjectionStarted || !bridgeFrameFile.exists()) return
+        bridgeFrameFile.parentFile?.mkdirs()
+        bridgeInjectionStarted = true
+        val path = bridgeFrameFile.absolutePath
+        serviceScope.launch {
+            try {
+                injector?.stop()
+                injector = CameraInjector(
+                    context = this@VCamService,
+                    mediaPath = path,
+                    isVideo = false,
+                    targetPackage = null,
+                    isLiveStream = true
+                )
+                injector?.start()
+                updateNotification(
+                    "OBS Bridge Active",
+                    "Live OBS frames are being injected through VCam"
+                )
+            } catch (e: Exception) {
+                bridgeInjectionStarted = false
+                updateNotification("OBS Bridge Error", e.message ?: "Unable to start stream")
+            }
+        }
+    }
+
     // ── ConnectServer (link to Windows app) ───────────────────────────
 
     private fun startConnectServer() {
@@ -259,6 +312,25 @@ class VCamService : Service() {
     private fun handleRemoteCommand(cmd: String, params: JSONObject) {
         val inj = injector
         when (cmd) {
+            "frame" -> {
+                val encoded = params.optString("jpeg", "")
+                if (encoded.isBlank()) return
+                try {
+                    val bytes = Base64.decode(encoded, Base64.DEFAULT)
+                    val destination = bridgeFrameFile
+                    destination.parentFile?.mkdirs()
+                    val temporary = File(destination.parentFile, "${destination.name}.tmp")
+                    FileOutputStream(temporary).use { it.write(bytes) }
+                    if (!temporary.renameTo(destination)) {
+                        temporary.delete()
+                    }
+                    if (!bridgeInjectionStarted) {
+                        startBridgeInjection()
+                    }
+                } catch (_: Exception) {
+                    // A damaged frame must not interrupt the active stream.
+                }
+            }
             "zoom" -> {
                 val v = params.optDouble("value", 1.0).toFloat().coerceIn(1f, 5f)
                 inj?.zoomFactor = v

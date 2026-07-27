@@ -21,6 +21,9 @@ import subprocess
 import threading
 import sys
 import os
+import base64
+import io
+import time
 
 PORT = 7979
 APP_TITLE = "Conect VCam"
@@ -50,6 +53,9 @@ class ConnectVcam:
         self.pan_y = 0
         self.rotation = 0
         self.mirror_state = False
+        self.streaming = False
+        self.stream_thread: threading.Thread | None = None
+        self.stream_stop = threading.Event()
 
         # Tk vars
         self.host_var  = tk.StringVar(value="localhost")
@@ -57,6 +63,8 @@ class ConnectVcam:
         self.token_var = tk.StringVar()
         self.zoom_var  = tk.DoubleVar(value=1.0)
         self.scale_var = tk.DoubleVar(value=1.0)
+        self.monitor_var = tk.StringVar(value="1")
+        self.jpeg_quality_var = tk.IntVar(value=82)
 
         self._build_ui()
 
@@ -106,6 +114,7 @@ class ConnectVcam:
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
         self._build_connection_card()
+        self._build_obs_stream_card()
         self._build_zoom_card()
         self._build_scale_card()
         self._build_pan_card()
@@ -151,6 +160,35 @@ class ConnectVcam:
         btns = tk.Frame(f, bg=CARD); btns.pack(fill="x", pady=(8, 2))
         self._btn(btns, "⚡ ADB Forward", self._adb_forward, color="#21262d", width=14)
         self.btn_connect = self._btn(btns, "🔌 Connect", self._toggle_connect, color=ACCENT, width=14)
+
+    def _build_obs_stream_card(self):
+        f = self._card("OBS LIVE STREAM / بث OBS المباشر")
+
+        info = ("ضع نافذة OBS على شاشة مستقلة أو اجعلها في المقدمة، ثم اختر الشاشة "
+                "واضغط Start Stream. سيتم إرسال آخر إطار فقط لتقليل التأخير.")
+        tk.Label(f, text=info, bg=CARD, fg=FG2, justify="left",
+                 wraplength=370, font=("Segoe UI", 8)).pack(anchor="w", pady=(0, 8))
+
+        row = tk.Frame(f, bg=CARD)
+        row.pack(fill="x", pady=2)
+        tk.Label(row, text="Monitor:", bg=CARD, fg=FG2,
+                 font=("Segoe UI", 9)).pack(side="left")
+        tk.Entry(row, textvariable=self.monitor_var, bg="#0d1117", fg=FG,
+                 insertbackground=FG, relief="flat", bd=4, width=6).pack(side="left", padx=6)
+        tk.Label(row, text="JPEG quality:", bg=CARD, fg=FG2,
+                 font=("Segoe UI", 9)).pack(side="left", padx=(12, 4))
+        tk.Entry(row, textvariable=self.jpeg_quality_var, bg="#0d1117", fg=FG,
+                 insertbackground=FG, relief="flat", bd=4, width=5).pack(side="left")
+
+        btns = tk.Frame(f, bg=CARD)
+        btns.pack(fill="x", pady=(8, 2))
+        self.btn_stream = self._btn(
+            btns, "▶ Start Stream", self._toggle_stream, color=GREEN, fg="#ffffff", width=16
+        )
+        self.lbl_stream = tk.Label(
+            btns, text="● Idle", bg=CARD, fg=FG2, font=("Segoe UI", 8)
+        )
+        self.lbl_stream.pack(side="right", padx=4, pady=8)
 
     def _build_zoom_card(self):
         f = self._card("ZOOM / تقريب")
@@ -283,6 +321,105 @@ class ConnectVcam:
         else:
             threading.Thread(target=self._connect, daemon=True).start()
 
+    def _toggle_stream(self):
+        if self.streaming:
+            self._stop_stream()
+            return
+        if not self.connected:
+            messagebox.showwarning(
+                "Not connected",
+                "Connect to Virtual Cam first, then start the OBS stream."
+            )
+            return
+        try:
+            monitor = int(self.monitor_var.get())
+            if monitor < 1:
+                raise ValueError
+            quality = max(40, min(95, int(self.jpeg_quality_var.get())))
+            self.jpeg_quality_var.set(quality)
+        except ValueError:
+            messagebox.showerror("Capture settings", "Monitor must be 1 or higher and quality must be a number.")
+            return
+
+        self.streaming = True
+        self.stream_stop.clear()
+        self.btn_stream.config(text="■ Stop Stream", bg=RED)
+        self.lbl_stream.config(text="● Streaming", fg=GREEN)
+        self.stream_thread = threading.Thread(target=self._stream_loop, daemon=True)
+        self.stream_thread.start()
+
+    def _stop_stream(self):
+        self.streaming = False
+        self.stream_stop.set()
+        self.btn_stream.config(text="▶ Start Stream", bg=GREEN)
+        self.lbl_stream.config(text="● Idle", fg=FG2)
+
+    def _stream_loop(self):
+        """Send OBS preview frames over the already authenticated USB socket.
+
+        mss captures the selected monitor and Pillow encodes a compact JPEG.
+        The Android side accepts frames without per-frame ACKs so a slow frame
+        can never queue behind a newer frame.
+        """
+        try:
+            import mss
+            from PIL import Image
+        except ImportError:
+            self.root.after(0, lambda: (
+                self._stop_stream(),
+                messagebox.showerror(
+                    "Missing capture support",
+                    "Install the capture dependencies with:\n"
+                    "pip install -r requirements.txt"
+                )
+            ))
+            return
+
+        try:
+            monitor_number = max(1, int(self.monitor_var.get()))
+            quality = max(40, min(95, int(self.jpeg_quality_var.get())))
+            with mss.mss() as screen:
+                monitors = screen.monitors
+                if monitor_number >= len(monitors):
+                    monitor_number = 1
+                    self.root.after(0, lambda: self.monitor_var.set("1"))
+
+                while self.streaming and not self.stream_stop.is_set():
+                    started = time.monotonic()
+                    shot = screen.grab(monitors[monitor_number])
+                    image = Image.frombytes("RGB", shot.size, shot.rgb)
+                    image.thumbnail((1280, 720), Image.Resampling.LANCZOS)
+                    buffer = io.BytesIO()
+                    image.save(buffer, format="JPEG", quality=quality, optimize=True)
+                    payload = base64.b64encode(buffer.getvalue()).decode("ascii")
+                    self._send_frame(payload)
+
+                    # Keep a stable ~30 FPS cadence while never accumulating
+                    # delayed frames when the USB connection is busy.
+                    wait = max(0.0, (1.0 / 30.0) - (time.monotonic() - started))
+                    if self.stream_stop.wait(wait):
+                        break
+        except Exception as exc:
+            if self.streaming:
+                self.root.after(0, lambda err=exc: messagebox.showerror(
+                    "OBS stream stopped", str(err)
+                ))
+        finally:
+            if self.streaming:
+                self.root.after(0, self._stop_stream)
+
+    def _send_frame(self, jpeg_b64: str):
+        if not self.connected or self.sock is None:
+            return
+        try:
+            packet = (json.dumps({"cmd": "frame", "jpeg": jpeg_b64}) + "\n").encode("utf-8")
+            with self.send_lock:
+                if self.sock is not None:
+                    self.sock.sendall(packet)
+        except Exception:
+            self.root.after(0, self._stop_stream)
+            self.root.after(0, self._disconnect)
+
     def _connect(self):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -320,6 +457,8 @@ class ConnectVcam:
                 "• Virtual Cam service is running on phone"))
 
     def _disconnect(self):
+        if self.streaming:
+            self._stop_stream()
         self.connected = False
         if self.sock:
             try: self.sock.close()

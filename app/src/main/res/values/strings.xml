@@ -54,6 +54,30 @@
     <string name="link_enabled_msg">تم تفعيل الربط — المنفذ 7979</string>
     <string name="link_disabled_msg">تم إيقاف الربط</string>
 
+    <!-- Source selection and OBS Bridge -->
+    <string name="source_mode_title">اختر مصدر الكاميرا</string>
+    <string name="source_mode_subtitle">اختر طريقة العرض التي تريد استخدامها، ويمكنك تغييرها لاحقاً بدون فقدان إعدادات الحقن.</string>
+    <string name="source_local_upload">رفع الملفات محلياً</string>
+    <string name="source_obs_bridge">ربط مع OBS عبر Bridg</string>
+    <string name="source_mode_note">الرفع المحلي يفتح صفحة الوسائط الحالية كما هي. ربط OBS يستخدم Bridg لإرسال بث OBS مباشرة عبر USB إلى الكاميرا الافتراضية.</string>
+    <string name="back">رجوع</string>
+    <string name="bridge_title">ربط OBS</string>
+    <string name="bridge_subtitle">بث مباشر إلى Virtual Cam</string>
+    <string name="bridge_status_ready">جاهز للبث</string>
+    <string name="bridge_status_stopped">متوقف</string>
+    <string name="bridge_connection_title">معلومات اتصال Bridg</string>
+    <string name="bridge_host">Host في Bridg</string>
+    <string name="bridge_port">Port</string>
+    <string name="bridge_token_label">رمز الأمان</string>
+    <string name="bridge_token_hint">استخدم نفس البيانات في Bridg على الكمبيوتر بعد تفعيل USB Debugging.</string>
+    <string name="bridge_copy">نسخ الرمز</string>
+    <string name="bridge_token_copied">تم نسخ رمز الأمان</string>
+    <string name="bridge_token_required">أدخل رمز الأمان</string>
+    <string name="bridge_start">تفعيل الربط</string>
+    <string name="bridge_stop">إيقاف الربط</string>
+    <string name="bridge_ready">تم تفعيل الربط. شغّل Bridg على الكمبيوتر واضغط Start.</string>
+    <string name="bridge_steps">الخطوات:\n1. شغّل OBS وضع المصدر الذي تريد عرضه.\n2. وصّل الهاتف بالكمبيوتر عبر USB وفعّل USB Debugging.\n3. افتح Bridg، أدخل Host وPort والرمز، ثم اضغط Start.\n4. سيصل بث OBS مباشرة إلى مسار الحقن الحالي وبزمن استجابة منخفض.</string>
+
     <!-- Auth strings -->
     <string name="fill_all_fields">يرجى تعبئة جميع الحقول</string>
     <string name="login_failed">فشل تسجيل الدخول. تأكد من البيانات وحاول مرة أخرى</string>

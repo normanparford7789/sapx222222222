@@ -28,6 +28,7 @@ class CameraInjector(
     private val mediaPath: String,
     private val isVideo: Boolean,
     private val targetPackage: String?,
+    private val isLiveStream: Boolean = false,
     @Volatile var rotation: Int = 0,
     @Volatile var mirror: Boolean = false,
     @Volatile var zoomFactor: Float = 1f,
@@ -116,6 +117,15 @@ class CameraInjector(
 
     private suspend fun performInjection() {
         Log.d(TAG, "performInjection: isVideo=$isVideo target=$targetPackage")
+
+        // Bridg supplies a new JPEG roughly every 33 ms. It intentionally
+        // bypasses the static-file Vcplax path and uses the existing native
+        // V4L2/shared-frame injection path, so the original local workflow
+        // remains unchanged.
+        if (isLiveStream) {
+            legacyInject()
+            return
+        }
 
         // ── PRIMARY: VcplaxEngine ──────────────────────────────────────────────
         try {
@@ -301,11 +311,33 @@ class CameraInjector(
     }
 
     private suspend fun streamFramesToV4L2(device: String) {
-        if (isVideo) streamVideo() else streamImage()
+        if (isVideo) streamVideo() else if (isLiveStream) streamLiveImage() else streamImage()
     }
 
     private suspend fun streamFramesToSharedFile() {
-        if (isVideo) streamVideo() else streamImage()
+        if (isVideo) streamVideo() else if (isLiveStream) streamLiveImage() else streamImage()
+    }
+
+    /**
+     * Decode the latest atomically-written OBS JPEG and feed it into the same
+     * native frame pump used by local image injection. The short wait keeps
+     * startup safe when the first frame arrives just after the service starts.
+     */
+    private suspend fun streamLiveImage() = withContext(Dispatchers.IO) {
+        resetLastRendered()
+        try {
+            while (running) {
+                val current = loadBitmapForInjection(mediaPath)
+                if (current != null) {
+                    val transformed = applyTransforms(current)
+                    val yuyv = bitmapToYUYV(transformed, TARGET_W, TARGET_H)
+                    if (transformed !== current) transformed.recycle()
+                    current.recycle()
+                    nativeUpdateYUYVFrame(yuyv, TARGET_W, TARGET_H)
+                }
+                delay(33L)
+            }
+        } finally {}
     }
 
     /**

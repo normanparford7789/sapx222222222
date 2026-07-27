@@ -16,7 +16,7 @@ import com.vcam.R
 import com.vcam.data.AuthManager
 import com.vcam.data.SupabaseClientProvider
 import com.vcam.databinding.ActivityLoginBinding
-import com.vcam.ui.MainActivity
+import com.vcam.ui.SourceModeActivity
 import io.github.jan.supabase.gotrue.auth
 import io.github.jan.supabase.gotrue.providers.Google
 import io.github.jan.supabase.gotrue.providers.builtin.IDToken
@@ -116,7 +116,7 @@ class LoginActivity : AppCompatActivity() {
     }
 
     private fun goToMain() {
-        startActivity(Intent(this, MainActivity::class.java).apply {
+        startActivity(Intent(this, SourceModeActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         })
         finish()

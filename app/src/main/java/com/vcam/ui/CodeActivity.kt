@@ -11,6 +11,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.vcam.R
 import com.vcam.utils.LicenseChecker
+import com.vcam.ui.SourceModeActivity
 import kotlinx.coroutines.launch
 
 class CodeActivity : AppCompatActivity() {
@@ -77,7 +78,7 @@ class CodeActivity : AppCompatActivity() {
     }
 
     private fun goToMain() {
-        startActivity(Intent(this@CodeActivity, MainActivity::class.java))
+        startActivity(Intent(this@CodeActivity, SourceModeActivity::class.java))
         finish()
     }
 

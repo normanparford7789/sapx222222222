@@ -75,6 +75,20 @@
             android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize"/>
 
+        <!-- Source selection after authentication -->
+        <activity
+            android:name=".ui.SourceModeActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize"/>
+
+        <!-- OBS / Bridg USB stream setup -->
+        <activity
+            android:name=".ui.ObsBridgeActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize"/>
+
         <!-- ACCOUNT -->
         <activity
             android:name=".ui.account.AccountActivity"

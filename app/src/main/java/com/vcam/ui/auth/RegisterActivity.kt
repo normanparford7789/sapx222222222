@@ -9,7 +9,7 @@ import androidx.lifecycle.lifecycleScope
 import com.vcam.R
 import com.vcam.data.AuthManager
 import com.vcam.databinding.ActivityRegisterBinding
-import com.vcam.ui.MainActivity
+import com.vcam.ui.SourceModeActivity
 import kotlinx.coroutines.launch
 
 class RegisterActivity : AppCompatActivity() {
@@ -57,7 +57,7 @@ class RegisterActivity : AppCompatActivity() {
             result.fold(
                 onSuccess = {
                     Toast.makeText(this@RegisterActivity, getString(R.string.account_created), Toast.LENGTH_SHORT).show()
-                    startActivity(Intent(this@RegisterActivity, MainActivity::class.java).apply {
+                    startActivity(Intent(this@RegisterActivity, SourceModeActivity::class.java).apply {
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
                     })
                     finish()

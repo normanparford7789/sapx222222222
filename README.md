@@ -36,14 +36,23 @@ See [Releases](../../releases) — built automatically by GitHub Actions.
 
 APK output: `app/build/outputs/apk/debug/app-debug.apk`
 
+The Windows Bridg build also includes `mss` and `Pillow` for low-latency OBS
+monitor capture:
+
+```bash
+cd conect_vcam
+pip install -r requirements.txt
+pyinstaller conect_vcam.spec --noconfirm --clean
+```
+
 ## Usage
 
 1. Install APK on your rooted emulator
 2. Open VCam — grant root permission when prompted
-3. Tap **Pick Image** or **Pick Video** to load your media
-4. (Optional) Select a specific target app from the list
-5. Tap **Start VCam**
-6. Open the target app and access its camera — it will show your image/video
+3. Choose **رفع الملفات محلياً** to keep using the existing media workflow, or choose **ربط مع OBS عبر Bridg**
+4. For OBS mode, open OBS, connect the phone over USB, enable the link in the OBS Bridge screen, then enter the displayed host/port/token in Bridg
+5. Click **Start Stream** in Bridg; the live OBS frames use the existing VCam injection pipeline
+6. For local mode, tap **Pick Image** or **Pick Video**, then **Start VCam** as before
 
 ## Architecture
 

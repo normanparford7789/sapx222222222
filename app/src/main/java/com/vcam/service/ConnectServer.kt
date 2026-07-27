@@ -14,7 +14,6 @@ import java.io.InputStreamReader
 import java.io.PrintWriter
 import java.net.ServerSocket
 import java.net.Socket
-
 /**
  * ConnectServer — TCP server that lets the "conect vcam" Windows app
  * control zoom / scale / pan / rotation / mirror in real-time over USB (ADB forward).
@@ -67,12 +66,15 @@ class ConnectServer(
         }
     }
 
-    private val scope = CoroutineScope(Dispatchers.IO + Job())
+    private var scope = CoroutineScope(Dispatchers.IO + Job())
     private var serverSocket: ServerSocket? = null
     @Volatile private var running = false
 
     fun start() {
         if (running) return
+        // stop() cancels the previous coroutine scope. Recreate it so the
+        // user can turn the bridge off and on again without restarting VCam.
+        scope = CoroutineScope(Dispatchers.IO + Job())
         running = true
         scope.launch {
             try {
@@ -131,6 +133,17 @@ class ConnectServer(
                             authenticated = clientToken == token
                             if (authenticated) reply(JSONObject().put("status", "ok").put("message", "authenticated"))
                             else err("invalid token")
+                        }
+
+                        "frame" -> {
+                            if (!authenticated) {
+                                err("not authenticated")
+                                continue
+                            }
+                            // Frames are fire-and-forget. Sending an ACK for
+                            // every frame creates back-pressure on a 30 FPS
+                            // USB stream and makes the preview feel laggy.
+                            onCommand(cmd, json)
                         }
 
                         else -> {

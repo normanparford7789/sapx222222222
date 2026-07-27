@@ -7,7 +7,10 @@ a = Analysis(
     pathex=['.'],
     binaries=[],
     datas=[],
-    hiddenimports=['tkinter', 'tkinter.ttk', 'tkinter.messagebox', 'tkinter.font'],
+    hiddenimports=[
+        'tkinter', 'tkinter.ttk', 'tkinter.messagebox', 'tkinter.font',
+        'mss', 'mss.windows', 'PIL', 'PIL.Image', 'PIL.JpegImagePlugin',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
