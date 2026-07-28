@@ -65,6 +65,10 @@ class ConnectVcam:
         self.scale_var = tk.DoubleVar(value=1.0)
         self.monitor_var = tk.StringVar(value="1")
         self.jpeg_quality_var = tk.IntVar(value=82)
+        self.stream_mode_var     = tk.StringVar(value="screen")
+        self.obs_ws_host_var     = tk.StringVar(value="localhost")
+        self.obs_ws_port_var     = tk.IntVar(value=4455)
+        self.obs_ws_password_var = tk.StringVar()
 
         self._build_ui()
 
@@ -164,31 +168,81 @@ class ConnectVcam:
     def _build_obs_stream_card(self):
         f = self._card("OBS LIVE STREAM / بث OBS المباشر")
 
-        info = ("ضع نافذة OBS على شاشة مستقلة أو اجعلها في المقدمة، ثم اختر الشاشة "
-                "واضغط Start Stream. سيتم إرسال آخر إطار فقط لتقليل التأخير.")
-        tk.Label(f, text=info, bg=CARD, fg=FG2, justify="left",
-                 wraplength=370, font=("Segoe UI", 8)).pack(anchor="w", pady=(0, 8))
-
-        row = tk.Frame(f, bg=CARD)
-        row.pack(fill="x", pady=2)
-        tk.Label(row, text="Monitor:", bg=CARD, fg=FG2,
+        # ── اختيار الوضع ───────────────────────────────────────────────
+        mode_row = tk.Frame(f, bg=CARD)
+        mode_row.pack(fill="x", pady=(0, 6))
+        tk.Label(mode_row, text="Mode:", bg=CARD, fg=FG2,
                  font=("Segoe UI", 9)).pack(side="left")
-        tk.Entry(row, textvariable=self.monitor_var, bg="#0d1117", fg=FG,
+        tk.Radiobutton(mode_row, text="📷 Screen Capture", variable=self.stream_mode_var,
+                       value="screen", bg=CARD, fg=FG, selectcolor="#21262d",
+                       activebackground=CARD, font=("Segoe UI", 9),
+                       command=self._on_stream_mode_change).pack(side="left", padx=8)
+        tk.Radiobutton(mode_row, text="🔌 OBS WebSocket", variable=self.stream_mode_var,
+                       value="obs_ws", bg=CARD, fg=FG, selectcolor="#21262d",
+                       activebackground=CARD, font=("Segoe UI", 9),
+                       command=self._on_stream_mode_change).pack(side="left")
+
+        # ── حاوية الإعدادات (تتبدل بحسب الوضع) ────────────────────────
+        settings_container = tk.Frame(f, bg=CARD)
+        settings_container.pack(fill="x")
+
+        # وضع التقاط الشاشة
+        self.screen_capture_frame = tk.Frame(settings_container, bg=CARD)
+        self.screen_capture_frame.pack(fill="x")
+        sc_info = ("ضع نافذة OBS ملء الشاشة (View → Fullscreen Projector → Program)،"
+                   " ثم اختر رقم الشاشة واضغط Start Stream.")
+        tk.Label(self.screen_capture_frame, text=sc_info, bg=CARD, fg=FG2, justify="left",
+                 wraplength=370, font=("Segoe UI", 8)).pack(anchor="w", pady=(0, 6))
+        sc_row = tk.Frame(self.screen_capture_frame, bg=CARD)
+        sc_row.pack(fill="x", pady=2)
+        tk.Label(sc_row, text="Monitor:", bg=CARD, fg=FG2,
+                 font=("Segoe UI", 9)).pack(side="left")
+        tk.Entry(sc_row, textvariable=self.monitor_var, bg="#0d1117", fg=FG,
                  insertbackground=FG, relief="flat", bd=4, width=6).pack(side="left", padx=6)
-        tk.Label(row, text="JPEG quality:", bg=CARD, fg=FG2,
+        tk.Label(sc_row, text="Quality:", bg=CARD, fg=FG2,
                  font=("Segoe UI", 9)).pack(side="left", padx=(12, 4))
-        tk.Entry(row, textvariable=self.jpeg_quality_var, bg="#0d1117", fg=FG,
+        tk.Entry(sc_row, textvariable=self.jpeg_quality_var, bg="#0d1117", fg=FG,
                  insertbackground=FG, relief="flat", bd=4, width=5).pack(side="left")
 
+        # وضع OBS WebSocket (مخفي بالبداية)
+        self.obs_ws_frame = tk.Frame(settings_container, bg=CARD)
+        ws_info = ("في OBS: Tools → WebSocket Server Settings → Enable WebSocket Server"
+                   " → انسخ Server Password وضعه هنا.")
+        tk.Label(self.obs_ws_frame, text=ws_info, bg=CARD, fg=FG2, justify="left",
+                 wraplength=370, font=("Segoe UI", 8)).pack(anchor="w", pady=(0, 6))
+        for lbl, var, w in [
+            ("WS Host:", self.obs_ws_host_var, 16),
+            ("WS Port:", self.obs_ws_port_var, 8),
+        ]:
+            r = tk.Frame(self.obs_ws_frame, bg=CARD); r.pack(fill="x", pady=2)
+            tk.Label(r, text=lbl, bg=CARD, fg=FG2, width=11, anchor="e").pack(side="left")
+            tk.Entry(r, textvariable=var, bg="#0d1117", fg=FG,
+                     insertbackground=FG, relief="flat", bd=4, width=w).pack(side="left", padx=4)
+        pw_row = tk.Frame(self.obs_ws_frame, bg=CARD); pw_row.pack(fill="x", pady=2)
+        tk.Label(pw_row, text="Password:", bg=CARD, fg=FG2, width=11, anchor="e").pack(side="left")
+        tk.Entry(pw_row, textvariable=self.obs_ws_password_var, bg="#0d1117", fg=FG,
+                 insertbackground=FG, relief="flat", bd=4, width=16, show="•").pack(side="left", padx=4)
+        q_row = tk.Frame(self.obs_ws_frame, bg=CARD); q_row.pack(fill="x", pady=2)
+        tk.Label(q_row, text="Quality:", bg=CARD, fg=FG2, width=11, anchor="e").pack(side="left")
+        tk.Entry(q_row, textvariable=self.jpeg_quality_var, bg="#0d1117", fg=FG,
+                 insertbackground=FG, relief="flat", bd=4, width=5).pack(side="left", padx=4)
+
+        # ── زر البدء/الإيقاف ───────────────────────────────────────────
         btns = tk.Frame(f, bg=CARD)
         btns.pack(fill="x", pady=(8, 2))
         self.btn_stream = self._btn(
             btns, "▶ Start Stream", self._toggle_stream, color=GREEN, fg="#ffffff", width=16
         )
-        self.lbl_stream = tk.Label(
-            btns, text="● Idle", bg=CARD, fg=FG2, font=("Segoe UI", 8)
-        )
+        self.lbl_stream = tk.Label(btns, text="● Idle", bg=CARD, fg=FG2, font=("Segoe UI", 8))
         self.lbl_stream.pack(side="right", padx=4, pady=8)
+
+    def _on_stream_mode_change(self):
+        if self.stream_mode_var.get() == "screen":
+            self.obs_ws_frame.pack_forget()
+            self.screen_capture_frame.pack(fill="x")
+        else:
+            self.screen_capture_frame.pack_forget()
+            self.obs_ws_frame.pack(fill="x")
 
     def _build_zoom_card(self):
         f = self._card("ZOOM / تقريب")
@@ -332,20 +386,29 @@ class ConnectVcam:
             )
             return
         try:
-            monitor = int(self.monitor_var.get())
-            if monitor < 1:
-                raise ValueError
             quality = max(40, min(95, int(self.jpeg_quality_var.get())))
             self.jpeg_quality_var.set(quality)
         except ValueError:
-            messagebox.showerror("Capture settings", "Monitor must be 1 or higher and quality must be a number.")
+            messagebox.showerror("Settings", "Quality must be a number between 40 and 95.")
             return
+
+        if self.stream_mode_var.get() == "screen":
+            try:
+                monitor = int(self.monitor_var.get())
+                if monitor < 1:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror("Capture settings", "Monitor must be 1 or higher.")
+                return
+            target = self._stream_loop
+        else:
+            target = self._stream_loop_obs_ws
 
         self.streaming = True
         self.stream_stop.clear()
         self.btn_stream.config(text="■ Stop Stream", bg=RED)
         self.lbl_stream.config(text="● Streaming", fg=GREEN)
-        self.stream_thread = threading.Thread(target=self._stream_loop, daemon=True)
+        self.stream_thread = threading.Thread(target=target, daemon=True)
         self.stream_thread.start()
 
     def _stop_stream(self):
@@ -405,6 +468,79 @@ class ConnectVcam:
                     "OBS stream stopped", str(err)
                 ))
         finally:
+            if self.streaming:
+                self.root.after(0, self._stop_stream)
+
+
+    def _stream_loop_obs_ws(self):
+        """Grab frames directly from OBS via WebSocket v5 (OBS 28+).
+
+        No screen capture needed. OBS returns JPEG frames from its output
+        directly. Enable the server in OBS → Tools → WebSocket Server Settings.
+        """
+        try:
+            import obsws_python as obs_ws
+        except ImportError:
+            self.root.after(0, lambda: (
+                self._stop_stream(),
+                messagebox.showerror(
+                    "Missing dependency",
+                    "Run:  pip install -r requirements.txt"
+                )
+            ))
+            return
+
+        host     = self.obs_ws_host_var.get().strip() or "localhost"
+        try:
+            port = int(self.obs_ws_port_var.get())
+        except (ValueError, Exception):
+            port = 4455
+        password = self.obs_ws_password_var.get()
+        quality  = max(40, min(95, int(self.jpeg_quality_var.get())))
+
+        try:
+            cl = obs_ws.ReqClient(host=host, port=port, password=password, timeout=5)
+        except Exception as exc:
+            self.root.after(0, lambda e=exc: (
+                self._stop_stream(),
+                messagebox.showerror(
+                    "OBS WebSocket",
+                    f"لا يمكن الاتصال بـ OBS:\n{e}\n\n"
+                    "تأكد أن OBS شغّال وأن WebSocket Server مفعّل."
+                )
+            ))
+            return
+
+        try:
+            while self.streaming and not self.stream_stop.is_set():
+                started = time.monotonic()
+                try:
+                    resp = cl.get_current_program_scene_screenshot(
+                        image_format="jpeg",
+                        image_width=1280,
+                        image_height=720,
+                        image_quality=quality,
+                    )
+                    # OBS returns a data-URL: "data:image/jpeg;base64,<data>"
+                    data_url: str = resp.image_data
+                    _, encoded = data_url.split(",", 1)
+                    self._send_frame(encoded.strip())
+                except Exception as exc:
+                    if self.streaming:
+                        self.root.after(0, lambda e=exc: (
+                            self._stop_stream(),
+                            messagebox.showerror("OBS WebSocket", f"خطأ في الإطار:\n{e}")
+                        ))
+                    break
+
+                wait = max(0.0, (1.0 / 30.0) - (time.monotonic() - started))
+                if self.stream_stop.wait(wait):
+                    break
+        finally:
+            try:
+                cl.disconnect()
+            except Exception:
+                pass
             if self.streaming:
                 self.root.after(0, self._stop_stream)
 
