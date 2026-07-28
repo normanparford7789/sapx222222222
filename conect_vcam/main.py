@@ -191,8 +191,7 @@ class ConnectVcam:
         preview_outer.pack(fill="x", pady=(0, 8))
         self.preview_label = tk.Label(
             preview_outer,
-            text="📷  Preview
-اضغط Start Stream لبدء البث",
+            text="📷  Preview\nاضغط Start Stream لبدء البث",
             bg="#0d1117", fg=FG2,
             font=("Segoe UI", 9),
             width=PREVIEW_W, height=12,
