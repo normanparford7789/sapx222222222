@@ -327,10 +327,6 @@ class ConnectVcam:
         if self.streaming:
             self._stop_stream()
             return
-        if not self.connected:
-            messagebox.showwarning("Not connected",
-                                   "Connect to Virtual Cam first, then start the stream.")
-            return
         try:
             quality = max(40, min(95, int(self.jpeg_quality_var.get())))
             self.jpeg_quality_var.set(quality)
@@ -352,9 +348,44 @@ class ConnectVcam:
         self.btn_stream.config(text="▶ Start Stream", bg=GREEN)
         self.lbl_stream.config(text="● Idle", fg=FG2)
 
+    def _auto_connect(self):
+        """Best-effort auto-connect: ADB forward then connect to the phone.
+        Called once when Start Stream is pressed so frames reach the Android
+        app without the user having to click Connect manually."""
+        try:
+            subprocess.run(
+                ["adb", "forward", f"tcp:{PORT}", f"tcp:{PORT}"],
+                capture_output=True, text=True, timeout=10
+            )
+        except Exception:
+            pass
+        if not self.connected:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(5)
+                s.connect((self.host_var.get(), int(self.port_var.get())))
+                s.settimeout(None)
+                self.sock = s
+                token = self.token_var.get().strip()
+                msg = json.dumps({"cmd": "auth", "token": token}) + "\n"
+                s.sendall(msg.encode("utf-8"))
+                resp = json.loads(s.makefile().readline())
+                if not resp.get("ok") and resp.get("status") != "ok":
+                    raise ConnectionError(resp.get("message", resp.get("error", "Auth failed")))
+                self.connected = True
+                self.btn_connect.config(text="✕ Disconnect", bg=RED)
+                self.lbl_status.config(text="● Connected", fg=GREEN)
+                threading.Thread(target=self._recv_loop, daemon=True).start()
+            except Exception:
+                # Connection is best-effort; the local preview still works.
+                self.connected = False
+
     # ── main stream loop ──────────────────────────────────────────────────
     def _stream_loop(self):
-        """Capture from OBS Virtual Camera, show preview, stream to phone."""
+        """Capture from OBS Virtual Camera, show preview, stream to phone.
+        Preview starts immediately; connection to the phone is attempted
+        automatically in the background so the user only needs to press
+        Start Stream."""
         try:
             import cv2
             from PIL import Image, ImageTk
@@ -389,6 +420,10 @@ class ConnectVcam:
                 )
             ))
             return
+
+        # Attempt to connect to the phone automatically so frames are
+        # forwarded over USB without the user clicking Connect manually.
+        self._auto_connect()
 
         # اقرأ أول إطار لمعرفة الدقة الفعلية
         ret, test_frame = cap.read()
@@ -460,7 +495,10 @@ class ConnectVcam:
 
     # ── send frame ────────────────────────────────────────────────────────
     def _send_frame(self, jpeg_b64: str):
-        """Fire-and-forget frame send — no ACK to avoid back-pressure at 30 fps."""
+        """Fire-and-forget frame send — no ACK to avoid back-pressure at 30 fps.
+        If not connected yet, the frame is silently skipped; the local preview
+        keeps running. A background auto-connect is already attempting to
+        establish the link."""
         if not self.connected or self.sock is None:
             return
         try:
@@ -469,8 +507,13 @@ class ConnectVcam:
                 if self.sock is not None:
                     self.sock.sendall(packet)
         except Exception:
-            self.root.after(0, self._stop_stream)
-            self.root.after(0, self._disconnect)
+            # Don't kill the preview just because the phone link dropped.
+            self.connected = False
+            if self.sock:
+                try: self.sock.close()
+                except Exception: pass
+                self.sock = None
+            self.root.after(0, lambda: self.lbl_status.config(text="● Disconnected", fg=RED))
 
     # ── ADB forward ───────────────────────────────────────────────────────
     def _adb_forward(self):
@@ -509,8 +552,8 @@ class ConnectVcam:
             msg   = json.dumps({"cmd": "auth", "token": token}) + "\n"
             s.sendall(msg.encode("utf-8"))
             resp  = json.loads(s.makefile().readline())
-            if not resp.get("ok"):
-                raise ConnectionError(resp.get("error", "Auth failed"))
+            if resp.get("status") != "ok":
+                raise ConnectionError(resp.get("message", resp.get("error", "Auth failed")))
 
             self.connected = True
             self.btn_connect.config(text="✕ Disconnect", bg=RED)
