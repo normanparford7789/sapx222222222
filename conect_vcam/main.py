@@ -6,11 +6,11 @@ Requirements:
   pip install -r requirements.txt
 
 Usage:
-  1. Connect Android phone via USB, enable USB Debugging
-  2. Click "ADB Forward" (or run: adb forward tcp:7979 tcp:7979)
-  3. Open Virtual Cam app on phone -> Enable Link -> copy token
-  4. Paste token here, click Connect
-  5. Use sliders/buttons to control zoom/pan/rotation/mirror in real-time
+  1. In OBS: Start Virtual Camera  (Tools → Start Virtual Camera)
+  2. Connect Android phone via USB, enable USB Debugging
+  3. Click "ADB Forward"  (or: adb forward tcp:7979 tcp:7979)
+  4. Open Virtual Cam app on phone → OBS Bridge → Enable Link → copy token
+  5. Paste token here, click Connect, then Start Stream
 """
 
 import tkinter as tk
@@ -25,106 +25,64 @@ import base64
 import io
 import time
 
-PORT = 7979
+PORT      = 7979
 APP_TITLE = "Conect VCam"
-BG = "#0d1117"
-CARD = "#161b22"
+BG    = "#0d1117"
+CARD  = "#161b22"
 ACCENT = "#4F8EF7"
 GREEN = "#22c55e"
-RED = "#ef4444"
-FG = "#e6edf3"
-FG2 = "#8b949e"
+RED   = "#ef4444"
+FG    = "#e6edf3"
+FG2   = "#8b949e"
+PREVIEW_W = 384
+PREVIEW_H = 216   # 16:9
 
 
 class ConnectVcam:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title(APP_TITLE)
-        self.root.geometry("440x700")
+        self.root.geometry("440x920")
         self.root.resizable(False, False)
         self.root.configure(bg=BG)
         self._set_icon()
 
-        # State
+        # connection state
         self.sock: socket.socket | None = None
         self.connected = False
         self.send_lock = threading.Lock()
-        self.pan_x = 0
-        self.pan_y = 0
-        self.rotation = 0
-        self.mirror_state = False
-        self.streaming = False
+
+        # camera / stream state
+        self.streaming     = False
         self.stream_thread: threading.Thread | None = None
-        self.stream_stop = threading.Event()
+        self.stream_stop   = threading.Event()
+        self._preview_photo = None   # keep ImageTk ref alive
+
+        # control state
+        self.pan_x      = 0
+        self.pan_y      = 0
+        self.rotation   = 0
+        self.mirror_state = False
 
         # Tk vars
-        self.host_var  = tk.StringVar(value="localhost")
-        self.port_var  = tk.IntVar(value=PORT)
-        self.token_var = tk.StringVar()
-        self.zoom_var  = tk.DoubleVar(value=1.0)
-        self.scale_var = tk.DoubleVar(value=1.0)
-        self.monitor_var = tk.StringVar(value="1")
-        self.jpeg_quality_var = tk.IntVar(value=82)
-        self.stream_mode_var     = tk.StringVar(value="screen")
-        self.obs_ws_host_var     = tk.StringVar(value="localhost")
-        self.obs_ws_port_var     = tk.IntVar(value=4455)
-        self.obs_ws_password_var = tk.StringVar()
+        self.host_var         = tk.StringVar(value="localhost")
+        self.port_var         = tk.IntVar(value=PORT)
+        self.token_var        = tk.StringVar()
+        self.zoom_var         = tk.DoubleVar(value=1.0)
+        self.scale_var        = tk.DoubleVar(value=1.0)
+        self.cam_index_var    = tk.IntVar(value=0)
+        self.jpeg_quality_var = tk.IntVar(value=85)
 
         self._build_ui()
 
+    # ── icon ──────────────────────────────────────────────────────────────
     def _set_icon(self):
         try:
             self.root.iconbitmap(default="icon.ico")
         except Exception:
             pass
 
-    # ── UI ────────────────────────────────────────────────────────────────
-
-    def _build_ui(self):
-        # Title bar
-        title_frame = tk.Frame(self.root, bg=BG, pady=12)
-        title_frame.pack(fill="x", padx=18)
-        tk.Label(title_frame, text="🔗  Conect VCam", bg=BG, fg=FG,
-                 font=("Segoe UI", 16, "bold")).pack(side="left")
-        self.lbl_status = tk.Label(title_frame, text="● Disconnected",
-                                   bg=BG, fg=RED, font=("Segoe UI", 9))
-        self.lbl_status.pack(side="right", pady=4)
-
-        tk.Frame(self.root, bg="#21262d", height=1).pack(fill="x")
-
-        # Scrollable main area
-        canvas = tk.Canvas(self.root, bg=BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(self.root, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-
-        self.main_frame = tk.Frame(canvas, bg=BG)
-        win_id = canvas.create_window((0, 0), window=self.main_frame, anchor="nw")
-
-        def _on_frame_configure(e):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-
-        def _on_canvas_configure(e):
-            canvas.itemconfig(win_id, width=e.width)
-
-        self.main_frame.bind("<Configure>", _on_frame_configure)
-        canvas.bind("<Configure>", _on_canvas_configure)
-
-        # Mouse wheel scrolling
-        def _on_mousewheel(e):
-            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
-
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
-
-        self._build_connection_card()
-        self._build_obs_stream_card()
-        self._build_zoom_card()
-        self._build_scale_card()
-        self._build_pan_card()
-        self._build_rotate_mirror_card()
-        self._build_instructions()
-
+    # ── UI helpers ────────────────────────────────────────────────────────
     def _card(self, title: str) -> tk.Frame:
         outer = tk.Frame(self.main_frame, bg=CARD, bd=0, relief="flat")
         outer.pack(fill="x", padx=14, pady=6)
@@ -142,6 +100,46 @@ class ConnectVcam:
         b.pack(side="left", padx=4, pady=2)
         return b
 
+    # ── build UI ──────────────────────────────────────────────────────────
+    def _build_ui(self):
+        # scrollable canvas so nothing gets cut off on small screens
+        canvas = tk.Canvas(self.root, bg=BG, highlightthickness=0)
+        vsb    = tk.Scrollbar(self.root, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        self.main_frame = tk.Frame(canvas, bg=BG)
+        win_id = canvas.create_window((0, 0), window=self.main_frame, anchor="nw")
+
+        def _on_configure(e):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfig(win_id, width=canvas.winfo_width())
+        self.main_frame.bind("<Configure>", _on_configure)
+
+        # mouse-wheel scroll
+        def _on_wheel(e):
+            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_wheel)
+
+        # title bar
+        hdr = tk.Frame(self.main_frame, bg=BG)
+        hdr.pack(fill="x", padx=14, pady=(14, 4))
+        tk.Label(hdr, text="⬡ CONECT VCAM", bg=BG, fg=ACCENT,
+                 font=("Segoe UI", 14, "bold")).pack(side="left")
+        self.lbl_status = tk.Label(hdr, text="● Disconnected", bg=BG, fg=RED,
+                                    font=("Segoe UI", 9))
+        self.lbl_status.pack(side="right", padx=4)
+
+        self._build_connection_card()
+        self._build_obs_vcam_card()
+        self._build_zoom_card()
+        self._build_scale_card()
+        self._build_pan_card()
+        self._build_rotate_mirror_card()
+        self._build_instructions()
+
+    # ── connection card ───────────────────────────────────────────────────
     def _build_connection_card(self):
         f = self._card("CONNECTION / الاتصال")
 
@@ -163,252 +161,190 @@ class ConnectVcam:
 
         btns = tk.Frame(f, bg=CARD); btns.pack(fill="x", pady=(8, 2))
         self._btn(btns, "⚡ ADB Forward", self._adb_forward, color="#21262d", width=14)
-        self.btn_connect = self._btn(btns, "🔌 Connect", self._toggle_connect, color=ACCENT, width=14)
+        self.btn_connect = self._btn(btns, "🔌 Connect", self._toggle_connect,
+                                     color=ACCENT, width=14)
 
-    def _build_obs_stream_card(self):
-        f = self._card("OBS LIVE STREAM / بث OBS المباشر")
+    # ── OBS Virtual Camera card ────────────────────────────────────────────
+    def _build_obs_vcam_card(self):
+        f = self._card("OBS VIRTUAL CAMERA / كاميرا OBS المباشرة")
 
-        # ── اختيار الوضع ───────────────────────────────────────────────
-        mode_row = tk.Frame(f, bg=CARD)
-        mode_row.pack(fill="x", pady=(0, 6))
-        tk.Label(mode_row, text="Mode:", bg=CARD, fg=FG2,
+        # ── اختيار الكاميرا ─────────────────────────────────────────────
+        ctrl_row = tk.Frame(f, bg=CARD); ctrl_row.pack(fill="x", pady=(0, 8))
+
+        tk.Label(ctrl_row, text="Camera:", bg=CARD, fg=FG2,
                  font=("Segoe UI", 9)).pack(side="left")
-        tk.Radiobutton(mode_row, text="📷 Screen Capture", variable=self.stream_mode_var,
-                       value="screen", bg=CARD, fg=FG, selectcolor="#21262d",
-                       activebackground=CARD, font=("Segoe UI", 9),
-                       command=self._on_stream_mode_change).pack(side="left", padx=8)
-        tk.Radiobutton(mode_row, text="🔌 OBS WebSocket", variable=self.stream_mode_var,
-                       value="obs_ws", bg=CARD, fg=FG, selectcolor="#21262d",
-                       activebackground=CARD, font=("Segoe UI", 9),
-                       command=self._on_stream_mode_change).pack(side="left")
+        tk.Entry(ctrl_row, textvariable=self.cam_index_var, bg="#0d1117", fg=FG,
+                 insertbackground=FG, relief="flat", bd=4, width=4,
+                 font=("Segoe UI", 10, "bold")).pack(side="left", padx=(6, 2))
+        tk.Label(ctrl_row, text="(index)", bg=CARD, fg=FG2,
+                 font=("Segoe UI", 8)).pack(side="left", padx=(0, 12))
 
-        # ── حاوية الإعدادات (تتبدل بحسب الوضع) ────────────────────────
-        settings_container = tk.Frame(f, bg=CARD)
-        settings_container.pack(fill="x")
+        self._btn(ctrl_row, "🔍 Detect", self._detect_cameras, color="#21262d", width=9)
 
-        # وضع التقاط الشاشة
-        self.screen_capture_frame = tk.Frame(settings_container, bg=CARD)
-        self.screen_capture_frame.pack(fill="x")
-        sc_info = ("ضع نافذة OBS ملء الشاشة (View → Fullscreen Projector → Program)،"
-                   " ثم اختر رقم الشاشة واضغط Start Stream.")
-        tk.Label(self.screen_capture_frame, text=sc_info, bg=CARD, fg=FG2, justify="left",
-                 wraplength=370, font=("Segoe UI", 8)).pack(anchor="w", pady=(0, 6))
-        sc_row = tk.Frame(self.screen_capture_frame, bg=CARD)
-        sc_row.pack(fill="x", pady=2)
-        tk.Label(sc_row, text="Monitor:", bg=CARD, fg=FG2,
-                 font=("Segoe UI", 9)).pack(side="left")
-        tk.Entry(sc_row, textvariable=self.monitor_var, bg="#0d1117", fg=FG,
-                 insertbackground=FG, relief="flat", bd=4, width=6).pack(side="left", padx=6)
-        tk.Label(sc_row, text="Quality:", bg=CARD, fg=FG2,
-                 font=("Segoe UI", 9)).pack(side="left", padx=(12, 4))
-        tk.Entry(sc_row, textvariable=self.jpeg_quality_var, bg="#0d1117", fg=FG,
-                 insertbackground=FG, relief="flat", bd=4, width=5).pack(side="left")
+        tk.Label(ctrl_row, text="Quality:", bg=CARD, fg=FG2,
+                 font=("Segoe UI", 9)).pack(side="left", padx=(8, 4))
+        tk.Entry(ctrl_row, textvariable=self.jpeg_quality_var, bg="#0d1117", fg=FG,
+                 insertbackground=FG, relief="flat", bd=4, width=4).pack(side="left")
 
-        # وضع OBS WebSocket (مخفي بالبداية)
-        self.obs_ws_frame = tk.Frame(settings_container, bg=CARD)
-        ws_info = ("في OBS: Tools → WebSocket Server Settings → Enable WebSocket Server"
-                   " → انسخ Server Password وضعه هنا.")
-        tk.Label(self.obs_ws_frame, text=ws_info, bg=CARD, fg=FG2, justify="left",
-                 wraplength=370, font=("Segoe UI", 8)).pack(anchor="w", pady=(0, 6))
-        for lbl, var, w in [
-            ("WS Host:", self.obs_ws_host_var, 16),
-            ("WS Port:", self.obs_ws_port_var, 8),
-        ]:
-            r = tk.Frame(self.obs_ws_frame, bg=CARD); r.pack(fill="x", pady=2)
-            tk.Label(r, text=lbl, bg=CARD, fg=FG2, width=11, anchor="e").pack(side="left")
-            tk.Entry(r, textvariable=var, bg="#0d1117", fg=FG,
-                     insertbackground=FG, relief="flat", bd=4, width=w).pack(side="left", padx=4)
-        pw_row = tk.Frame(self.obs_ws_frame, bg=CARD); pw_row.pack(fill="x", pady=2)
-        tk.Label(pw_row, text="Password:", bg=CARD, fg=FG2, width=11, anchor="e").pack(side="left")
-        tk.Entry(pw_row, textvariable=self.obs_ws_password_var, bg="#0d1117", fg=FG,
-                 insertbackground=FG, relief="flat", bd=4, width=16, show="•").pack(side="left", padx=4)
-        q_row = tk.Frame(self.obs_ws_frame, bg=CARD); q_row.pack(fill="x", pady=2)
-        tk.Label(q_row, text="Quality:", bg=CARD, fg=FG2, width=11, anchor="e").pack(side="left")
-        tk.Entry(q_row, textvariable=self.jpeg_quality_var, bg="#0d1117", fg=FG,
-                 insertbackground=FG, relief="flat", bd=4, width=5).pack(side="left", padx=4)
-
-        # ── زر البدء/الإيقاف ───────────────────────────────────────────
-        btns = tk.Frame(f, bg=CARD)
-        btns.pack(fill="x", pady=(8, 2))
-        self.btn_stream = self._btn(
-            btns, "▶ Start Stream", self._toggle_stream, color=GREEN, fg="#ffffff", width=16
+        # ── معاينة مباشرة ────────────────────────────────────────────────
+        preview_outer = tk.Frame(f, bg="#0d1117", bd=2, relief="sunken")
+        preview_outer.pack(fill="x", pady=(0, 8))
+        self.preview_label = tk.Label(
+            preview_outer,
+            text="📷  Preview
+اضغط Start Stream لبدء البث",
+            bg="#0d1117", fg=FG2,
+            font=("Segoe UI", 9),
+            width=PREVIEW_W, height=12,
+            cursor="crosshair"
         )
-        self.lbl_stream = tk.Label(btns, text="● Idle", bg=CARD, fg=FG2, font=("Segoe UI", 8))
+        self.preview_label.pack()
+
+        # ── زر البدء/الإيقاف ─────────────────────────────────────────────
+        btns = tk.Frame(f, bg=CARD); btns.pack(fill="x", pady=(0, 2))
+        self.btn_stream = self._btn(
+            btns, "▶ Start Stream", self._toggle_stream, color=GREEN, fg="#ffffff", width=16)
+        self.lbl_stream = tk.Label(
+            btns, text="● Idle", bg=CARD, fg=FG2, font=("Segoe UI", 8))
         self.lbl_stream.pack(side="right", padx=4, pady=8)
 
-    def _on_stream_mode_change(self):
-        if self.stream_mode_var.get() == "screen":
-            self.obs_ws_frame.pack_forget()
-            self.screen_capture_frame.pack(fill="x")
-        else:
-            self.screen_capture_frame.pack_forget()
-            self.obs_ws_frame.pack(fill="x")
-
+    # ── zoom card ─────────────────────────────────────────────────────────
     def _build_zoom_card(self):
         f = self._card("ZOOM / تقريب")
-
         header = tk.Frame(f, bg=CARD); header.pack(fill="x")
         tk.Label(header, text="Digital Zoom:", bg=CARD, fg=FG2,
                  font=("Segoe UI", 9)).pack(side="left")
         self.lbl_zoom = tk.Label(header, text="1.0×", bg=CARD, fg=ACCENT,
-                                 font=("Segoe UI", 10, "bold"))
+                                  font=("Segoe UI", 10, "bold"))
         self.lbl_zoom.pack(side="right")
-
         ttk.Scale(f, from_=1.0, to=5.0, orient="horizontal",
-                  variable=self.zoom_var,
-                  command=self._on_zoom).pack(fill="x", pady=4)
-
+                  variable=self.zoom_var, command=self._on_zoom).pack(fill="x", pady=4)
         btns = tk.Frame(f, bg=CARD); btns.pack()
         self._btn(btns, "1× Reset", lambda: self._set_zoom(1.0), color="#21262d", width=9)
         self._btn(btns, "2×", lambda: self._set_zoom(2.0), color="#21262d", width=5)
         self._btn(btns, "3×", lambda: self._set_zoom(3.0), color="#21262d", width=5)
         self._btn(btns, "5×", lambda: self._set_zoom(5.0), color="#21262d", width=5)
 
+    # ── scale card ────────────────────────────────────────────────────────
     def _build_scale_card(self):
         f = self._card("SCALE / حجم الإطار")
-
         header = tk.Frame(f, bg=CARD); header.pack(fill="x")
         tk.Label(header, text="Frame Fill Scale:", bg=CARD, fg=FG2,
                  font=("Segoe UI", 9)).pack(side="left")
         self.lbl_scale = tk.Label(header, text="100%", bg=CARD, fg=GREEN,
-                                  font=("Segoe UI", 10, "bold"))
+                                   font=("Segoe UI", 10, "bold"))
         self.lbl_scale.pack(side="right")
-
         ttk.Scale(f, from_=0.3, to=2.0, orient="horizontal",
-                  variable=self.scale_var,
-                  command=self._on_scale).pack(fill="x", pady=4)
-
+                  variable=self.scale_var, command=self._on_scale).pack(fill="x", pady=4)
         btns = tk.Frame(f, bg=CARD); btns.pack()
         self._btn(btns, "100%", lambda: self._set_scale(1.0), color="#21262d", width=9)
         self._btn(btns, "50%",  lambda: self._set_scale(0.5), color="#21262d", width=5)
         self._btn(btns, "150%", lambda: self._set_scale(1.5), color="#21262d", width=7)
         self._btn(btns, "200%", lambda: self._set_scale(2.0), color="#21262d", width=7)
 
+    # ── pan card ──────────────────────────────────────────────────────────
     def _build_pan_card(self):
         f = self._card("PAN / تحريك")
-
         grid = tk.Frame(f, bg=CARD); grid.pack(pady=4)
-
-        def pb(text, r, c, cmd):
+        arrows = [
+            ("↑", 0, 1, lambda: self._pan(0,  0.05)),
+            ("←", 1, 0, lambda: self._pan(-0.05, 0)),
+            ("⌂", 1, 1, self._reset_pan),
+            ("→", 1, 2, lambda: self._pan( 0.05, 0)),
+            ("↓", 2, 1, lambda: self._pan(0, -0.05)),
+        ]
+        for (text, r, c, cmd) in arrows:
             tk.Button(grid, text=text, command=cmd, bg="#21262d", fg=FG,
-                      relief="flat", width=4, height=2, font=("Segoe UI", 11),
-                      cursor="hand2", activebackground=ACCENT, activeforeground=FG
-                      ).grid(row=r, column=c, padx=3, pady=3)
+                      relief="flat", width=3, height=1, font=("Segoe UI", 11),
+                      cursor="hand2").grid(row=r, column=c, padx=2, pady=2)
 
-        pb("▲", 0, 1, lambda: self._pan(0, -50))
-        pb("◀", 1, 0, lambda: self._pan(-50, 0))
-        pb("⌖", 1, 1, self._pan_reset)
-        pb("▶", 1, 2, lambda: self._pan(50, 0))
-        pb("▼", 2, 1, lambda: self._pan(0, 50))
-
-        # Pan fine/coarse row
-        fine = tk.Frame(f, bg=CARD); fine.pack(pady=(4, 0))
-        tk.Label(fine, text="Step:", bg=CARD, fg=FG2, font=("Segoe UI", 8)).pack(side="left")
-        self.pan_step = tk.IntVar(value=50)
-        for v, lbl in [(20, "Fine"), (50, "Med"), (100, "Coarse")]:
-            tk.Radiobutton(fine, text=lbl, variable=self.pan_step, value=v,
-                           bg=CARD, fg=FG2, selectcolor=CARD,
-                           font=("Segoe UI", 8), activebackground=CARD).pack(side="left", padx=4)
-
-        self.lbl_pan = tk.Label(f, text="Pan: 0, 0", bg=CARD, fg=FG2,
-                                font=("Segoe UI", 8))
-        self.lbl_pan.pack()
-
+    # ── rotate / mirror card ──────────────────────────────────────────────
     def _build_rotate_mirror_card(self):
         f = self._card("ROTATE & MIRROR / تدوير وعكس")
+        btns = tk.Frame(f, bg=CARD); btns.pack()
+        self._btn(btns, "↺ −90°", lambda: self._rotate(-90), color="#21262d", width=8)
+        self._btn(btns, "↻ +90°", lambda: self._rotate( 90), color="#21262d", width=8)
+        self.btn_mirror = self._btn(btns, "⇆ Mirror OFF", self._toggle_mirror,
+                                    color="#21262d", width=12)
 
-        row = tk.Frame(f, bg=CARD); row.pack(fill="x")
-        tk.Label(row, text="Rotation:", bg=CARD, fg=FG2,
-                 font=("Segoe UI", 9)).pack(side="left")
-        self.lbl_rot = tk.Label(row, text="0°", bg=CARD, fg=ACCENT,
-                                font=("Segoe UI", 10, "bold"))
-        self.lbl_rot.pack(side="left", padx=6)
-
-        self._btn(row, "↻ +90°", self._rotate_cw, color="#21262d", width=9)
-        self._btn(row, "↺ -90°", self._rotate_ccw, color="#21262d", width=9)
-
-        row2 = tk.Frame(f, bg=CARD); row2.pack(fill="x", pady=6)
-        self.btn_mirror = tk.Button(row2, text="Mirror: OFF", command=self._toggle_mirror,
-                                    bg="#21262d", fg=FG2, relief="flat", padx=12, pady=6,
-                                    font=("Segoe UI", 9), cursor="hand2",
-                                    activebackground=ACCENT)
-        self.btn_mirror.pack(side="left", padx=4)
-
-        self._btn(row2, "Reset All", self._full_reset, color=RED, fg="#fff", width=10)
-
+    # ── instructions ──────────────────────────────────────────────────────
     def _build_instructions(self):
-        f = tk.Frame(self.main_frame, bg=BG); f.pack(fill="x", padx=14, pady=(4, 16))
-        text = ("Instructions:\n"
-                "1. Connect phone to PC via USB cable\n"
-                "2. Enable USB Debugging on the phone\n"
-                "3. Click 'ADB Forward' button above\n"
-                "4. In Virtual Cam app: toggle 'Enable Link', copy the token\n"
-                "5. Paste token above, click Connect\n"
-                "6. Controls update the camera feed in real-time (<100ms)")
-        tk.Label(f, text=text, bg=BG, fg=FG2, font=("Segoe UI", 8),
-                 justify="left", anchor="w").pack(anchor="w")
+        f = self._card("HOW TO USE / طريقة الاستخدام")
+        steps = (
+            "1. في OBS: ابدأ الكاميرا الافتراضية  (Tools → Start Virtual Camera)\n"
+            "2. وصّل الهاتف بـ USB وفعّل USB Debugging\n"
+            "3. اضغط ADB Forward → Connect → أدخل التوكن\n"
+            "4. اضغط 🔍 Detect لاختيار الكاميرا الصحيحة\n"
+            "5. اضغط ▶ Start Stream — تظهر المعاينة وتبدأ الحقن"
+        )
+        tk.Label(f, text=steps, bg=CARD, fg=FG2, justify="left",
+                 wraplength=370, font=("Segoe UI", 8)).pack(anchor="w")
 
-    # ── Connection ────────────────────────────────────────────────────────
+    # ── camera detection ──────────────────────────────────────────────────
+    def _detect_cameras(self):
+        """Scan indices 0-9 with DirectShow and report which ones open."""
+        def _scan():
+            try:
+                import cv2
+            except ImportError:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Missing", "Install opencv-python:\npip install -r requirements.txt"))
+                return
 
-    def _adb_forward(self):
-        try:
-            result = subprocess.run(
-                ["adb", "forward", f"tcp:{PORT}", f"tcp:{PORT}"],
-                capture_output=True, text=True, timeout=10
-            )
-            if result.returncode == 0:
-                messagebox.showinfo("ADB Forward", f"✓ ADB forward set: tcp:{PORT} → tcp:{PORT}")
-            else:
-                msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
-                messagebox.showerror("ADB Error", f"ADB forward failed:\n{msg}\n\nMake sure:\n• ADB is installed and in PATH\n• USB Debugging is enabled on phone\n• Phone is connected via USB")
-        except FileNotFoundError:
-            messagebox.showerror("ADB Not Found",
-                "ADB not found. Install Android Platform Tools:\n"
-                "https://developer.android.com/tools/releases/platform-tools\n"
-                "Then add the folder to your PATH.")
-        except subprocess.TimeoutExpired:
-            messagebox.showerror("ADB Timeout", "ADB command timed out. Is the phone connected?")
+            found = []
+            for i in range(10):
+                cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+                if cap.isOpened():
+                    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    found.append((i, w, h))
+                    cap.release()
 
-    def _toggle_connect(self):
-        if self.connected:
-            self._disconnect()
-        else:
-            threading.Thread(target=self._connect, daemon=True).start()
+            def _show():
+                if not found:
+                    messagebox.showwarning(
+                        "No cameras found",
+                        "No cameras detected.\n\n"
+                        "Make sure OBS is open and Virtual Camera is started:\n"
+                        "OBS → Tools → Start Virtual Camera"
+                    )
+                    return
+                lines = "\n".join(f"  Index {i}: {w}×{h}" for i, w, h in found)
+                msg = f"Cameras found:\n{lines}\n\nOBS Virtual Camera is usually the last index."
+                # Auto-set to the highest index (most likely OBS VCam)
+                best = found[-1][0]
+                self.cam_index_var.set(best)
+                messagebox.showinfo("Cameras detected", msg +
+                                    f"\n\nIndex set to {best}.")
+            self.root.after(0, _show)
 
+        threading.Thread(target=_scan, daemon=True).start()
+        self.lbl_stream.config(text="● Scanning...", fg=ACCENT)
+        self.root.after(5000, lambda: self.lbl_stream.config(
+            text="● Idle" if not self.streaming else "● Streaming", fg=FG2 if not self.streaming else GREEN))
+
+    # ── stream control ────────────────────────────────────────────────────
     def _toggle_stream(self):
         if self.streaming:
             self._stop_stream()
             return
         if not self.connected:
-            messagebox.showwarning(
-                "Not connected",
-                "Connect to Virtual Cam first, then start the OBS stream."
-            )
+            messagebox.showwarning("Not connected",
+                                   "Connect to Virtual Cam first, then start the stream.")
             return
         try:
             quality = max(40, min(95, int(self.jpeg_quality_var.get())))
             self.jpeg_quality_var.set(quality)
-        except ValueError:
-            messagebox.showerror("Settings", "Quality must be a number between 40 and 95.")
+            cam_idx = max(0, int(self.cam_index_var.get()))
+        except (ValueError, Exception):
+            messagebox.showerror("Settings", "Camera index and quality must be numbers.")
             return
-
-        if self.stream_mode_var.get() == "screen":
-            try:
-                monitor = int(self.monitor_var.get())
-                if monitor < 1:
-                    raise ValueError
-            except ValueError:
-                messagebox.showerror("Capture settings", "Monitor must be 1 or higher.")
-                return
-            target = self._stream_loop
-        else:
-            target = self._stream_loop_obs_ws
 
         self.streaming = True
         self.stream_stop.clear()
         self.btn_stream.config(text="■ Stop Stream", bg=RED)
         self.lbl_stream.config(text="● Streaming", fg=GREEN)
-        self.stream_thread = threading.Thread(target=target, daemon=True)
+        self.stream_thread = threading.Thread(target=self._stream_loop, daemon=True)
         self.stream_thread.start()
 
     def _stop_stream(self):
@@ -417,134 +353,115 @@ class ConnectVcam:
         self.btn_stream.config(text="▶ Start Stream", bg=GREEN)
         self.lbl_stream.config(text="● Idle", fg=FG2)
 
+    # ── main stream loop ──────────────────────────────────────────────────
     def _stream_loop(self):
-        """Send OBS preview frames over the already authenticated USB socket.
-
-        mss captures the selected monitor and Pillow encodes a compact JPEG.
-        The Android side accepts frames without per-frame ACKs so a slow frame
-        can never queue behind a newer frame.
-        """
+        """Capture from OBS Virtual Camera, show preview, stream to phone."""
         try:
-            import mss
-            from PIL import Image
+            import cv2
+            from PIL import Image, ImageTk
         except ImportError:
             self.root.after(0, lambda: (
                 self._stop_stream(),
-                messagebox.showerror(
-                    "Missing capture support",
-                    "Install the capture dependencies with:\n"
-                    "pip install -r requirements.txt"
-                )
+                messagebox.showerror("Missing dependencies",
+                                     "Run: pip install -r requirements.txt")
             ))
             return
 
-        try:
-            monitor_number = max(1, int(self.monitor_var.get()))
-            quality = max(40, min(95, int(self.jpeg_quality_var.get())))
-            with mss.mss() as screen:
-                monitors = screen.monitors
-                if monitor_number >= len(monitors):
-                    monitor_number = 1
-                    self.root.after(0, lambda: self.monitor_var.set("1"))
+        cam_idx = max(0, int(self.cam_index_var.get()))
+        quality = max(40, min(95, int(self.jpeg_quality_var.get())))
+        encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
 
-                while self.streaming and not self.stream_stop.is_set():
-                    started = time.monotonic()
-                    shot = screen.grab(monitors[monitor_number])
-                    image = Image.frombytes("RGB", shot.size, shot.rgb)
-                    image.thumbnail((1280, 720), Image.Resampling.LANCZOS)
-                    buffer = io.BytesIO()
-                    image.save(buffer, format="JPEG", quality=quality, optimize=True)
-                    payload = base64.b64encode(buffer.getvalue()).decode("ascii")
-                    self._send_frame(payload)
+        # فتح الكاميرا عبر DirectShow (أسرع وأكثر توافقاً على Windows)
+        cap = cv2.VideoCapture(cam_idx, cv2.CAP_DSHOW)
+        # طلب أعلى جودة ممكنة
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1920)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+        cap.set(cv2.CAP_PROP_FPS, 30)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)   # أدنى تخزين مؤقت = أقل تأخير
 
-                    # Keep a stable ~30 FPS cadence while never accumulating
-                    # delayed frames when the USB connection is busy.
-                    wait = max(0.0, (1.0 / 30.0) - (time.monotonic() - started))
-                    if self.stream_stop.wait(wait):
-                        break
-        except Exception as exc:
-            if self.streaming:
-                self.root.after(0, lambda err=exc: messagebox.showerror(
-                    "OBS stream stopped", str(err)
-                ))
-        finally:
-            if self.streaming:
-                self.root.after(0, self._stop_stream)
-
-
-    def _stream_loop_obs_ws(self):
-        """Grab frames directly from OBS via WebSocket v5 (OBS 28+).
-
-        No screen capture needed. OBS returns JPEG frames from its output
-        directly. Enable the server in OBS → Tools → WebSocket Server Settings.
-        """
-        try:
-            import obsws_python as obs_ws
-        except ImportError:
+        if not cap.isOpened():
             self.root.after(0, lambda: (
                 self._stop_stream(),
                 messagebox.showerror(
-                    "Missing dependency",
-                    "Run:  pip install -r requirements.txt"
+                    "Camera error",
+                    f"Cannot open camera index {cam_idx}.\n\n"
+                    "• Make sure OBS Virtual Camera is started\n"
+                    "• Try 🔍 Detect to find the correct index"
                 )
             ))
             return
 
-        host     = self.obs_ws_host_var.get().strip() or "localhost"
-        try:
-            port = int(self.obs_ws_port_var.get())
-        except (ValueError, Exception):
-            port = 4455
-        password = self.obs_ws_password_var.get()
-        quality  = max(40, min(95, int(self.jpeg_quality_var.get())))
-
-        try:
-            cl = obs_ws.ReqClient(host=host, port=port, password=password, timeout=5)
-        except Exception as exc:
-            self.root.after(0, lambda e=exc: (
+        # اقرأ أول إطار لمعرفة الدقة الفعلية
+        ret, test_frame = cap.read()
+        if not ret:
+            cap.release()
+            self.root.after(0, lambda: (
                 self._stop_stream(),
-                messagebox.showerror(
-                    "OBS WebSocket",
-                    f"لا يمكن الاتصال بـ OBS:\n{e}\n\n"
-                    "تأكد أن OBS شغّال وأن WebSocket Server مفعّل."
-                )
+                messagebox.showerror("Camera error", "Could not read from camera.")
             ))
             return
+
+        actual_h, actual_w = test_frame.shape[:2]
+        # أبعاد المعاينة بنسبة 16:9 داخل الإطار
+        prev_w = PREVIEW_W
+        prev_h = int(prev_w * actual_h / actual_w) if actual_w else PREVIEW_H
+        prev_h = max(prev_h, PREVIEW_H)
 
         try:
             while self.streaming and not self.stream_stop.is_set():
                 started = time.monotonic()
-                try:
-                    resp = cl.get_current_program_scene_screenshot(
-                        image_format="jpeg",
-                        image_width=1280,
-                        image_height=720,
-                        image_quality=quality,
-                    )
-                    # OBS returns a data-URL: "data:image/jpeg;base64,<data>"
-                    data_url: str = resp.image_data
-                    _, encoded = data_url.split(",", 1)
-                    self._send_frame(encoded.strip())
-                except Exception as exc:
-                    if self.streaming:
-                        self.root.after(0, lambda e=exc: (
-                            self._stop_stream(),
-                            messagebox.showerror("OBS WebSocket", f"خطأ في الإطار:\n{e}")
-                        ))
+
+                ret, frame = cap.read()
+                if not ret:
                     break
 
-                wait = max(0.0, (1.0 / 30.0) - (time.monotonic() - started))
+                # ── إرسال JPEG للهاتف ──────────────────────────────────
+                _, buf = cv2.imencode(".jpg", frame, encode_params)
+                jpeg_b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+                self._send_frame(jpeg_b64)
+
+                # ── تحديث المعاينة (BGR→RGB، تصغير للعرض) ──────────────
+                rgb   = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                img   = Image.fromarray(rgb)
+                img   = img.resize((prev_w, prev_h), Image.Resampling.BILINEAR)
+                photo = ImageTk.PhotoImage(img)
+                self.root.after(0, lambda p=photo: self._update_preview(p))
+
+                # ── ~30 FPS ─────────────────────────────────────────────
+                elapsed = time.monotonic() - started
+                wait    = max(0.0, (1.0 / 30.0) - elapsed)
                 if self.stream_stop.wait(wait):
                     break
+
+        except Exception as exc:
+            if self.streaming:
+                self.root.after(0, lambda e=exc: (
+                    self._stop_stream(),
+                    messagebox.showerror("Stream error", str(e))
+                ))
         finally:
-            try:
-                cl.disconnect()
-            except Exception:
-                pass
+            cap.release()
+            self.root.after(0, self._clear_preview)
             if self.streaming:
                 self.root.after(0, self._stop_stream)
 
+    def _update_preview(self, photo):
+        """Update the preview label in the main thread."""
+        self._preview_photo = photo       # prevent garbage collection
+        self.preview_label.config(image=photo, text="", width=PREVIEW_W, height=PREVIEW_H)
+
+    def _clear_preview(self):
+        """Reset preview label when stream stops."""
+        self._preview_photo = None
+        self.preview_label.config(
+            image="",
+            text="📷  Preview\nاضغط Start Stream لبدء البث",
+            width=PREVIEW_W, height=12
+        )
+
+    # ── send frame ────────────────────────────────────────────────────────
     def _send_frame(self, jpeg_b64: str):
+        """Fire-and-forget frame send — no ACK to avoid back-pressure at 30 fps."""
         if not self.connected or self.sock is None:
             return
         try:
@@ -556,6 +473,30 @@ class ConnectVcam:
             self.root.after(0, self._stop_stream)
             self.root.after(0, self._disconnect)
 
+    # ── ADB forward ───────────────────────────────────────────────────────
+    def _adb_forward(self):
+        try:
+            out = subprocess.run(
+                ["adb", "forward", f"tcp:{PORT}", f"tcp:{PORT}"],
+                capture_output=True, text=True, timeout=10
+            )
+            if out.returncode == 0:
+                messagebox.showinfo("ADB Forward", f"Port {PORT} forwarded ✓\nNow click Connect.")
+            else:
+                messagebox.showerror("ADB Forward", out.stderr or "ADB command failed.")
+        except FileNotFoundError:
+            messagebox.showerror("ADB not found",
+                                  "adb.exe not found. Add Android SDK platform-tools to PATH.")
+        except Exception as exc:
+            messagebox.showerror("ADB Forward", str(exc))
+
+    # ── connect / disconnect ──────────────────────────────────────────────
+    def _toggle_connect(self):
+        if self.connected:
+            self._disconnect()
+        else:
+            self._connect()
+
     def _connect(self):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -564,149 +505,105 @@ class ConnectVcam:
             s.settimeout(None)
             self.sock = s
 
-            # Authenticate
-            self._send_raw({"cmd": "auth", "token": self.token_var.get()})
-            resp = self._recv_raw()
+            # authenticate
+            token = self.token_var.get().strip()
+            msg   = json.dumps({"cmd": "auth", "token": token}) + "\n"
+            s.sendall(msg.encode("utf-8"))
+            resp  = json.loads(s.makefile().readline())
+            if not resp.get("ok"):
+                raise ConnectionError(resp.get("error", "Auth failed"))
 
-            if resp and resp.get("status") == "ok":
-                self.connected = True
-                self.root.after(0, lambda: (
-                    self.lbl_status.config(text="● Connected", fg=GREEN),
-                    self.btn_connect.config(text="✕ Disconnect")
-                ))
-            else:
-                s.close(); self.sock = None
-                msg = (resp or {}).get("message", "unknown error")
-                self.root.after(0, lambda: messagebox.showerror(
-                    "Auth Error", f"Authentication failed: {msg}\n\nCheck the token shown in Virtual Cam app."))
-        except Exception as e:
-            if self.sock:
-                try: self.sock.close()
-                except: pass
-                self.sock = None
-            self.root.after(0, lambda err=e: messagebox.showerror(
-                "Connection Error",
-                f"Cannot connect to {self.host_var.get()}:{self.port_var.get()}\n\n"
-                f"Error: {err}\n\nMake sure:\n"
-                "• ADB forward is set (click 'ADB Forward')\n"
-                "• 'Enable Link' is ON in Virtual Cam app\n"
-                "• Virtual Cam service is running on phone"))
+            self.connected = True
+            self.btn_connect.config(text="✕ Disconnect", bg=RED)
+            self.lbl_status.config(text="● Connected", fg=GREEN)
+
+            # start keep-alive listener
+            threading.Thread(target=self._recv_loop, daemon=True).start()
+        except Exception as exc:
+            self._disconnect()
+            messagebox.showerror("Connection failed", str(exc))
 
     def _disconnect(self):
         if self.streaming:
             self._stop_stream()
         self.connected = False
         if self.sock:
-            try: self.sock.close()
-            except: pass
+            try:
+                self.sock.close()
+            except Exception:
+                pass
             self.sock = None
+        self.btn_connect.config(text="🔌 Connect", bg=ACCENT)
         self.lbl_status.config(text="● Disconnected", fg=RED)
-        self.btn_connect.config(text="🔌 Connect")
 
-    # ── Protocol ──────────────────────────────────────────────────────────
-
-    def _send_raw(self, obj: dict):
-        if self.sock is None: return
+    def _recv_loop(self):
+        """Read incoming server messages (keep-alive / error detection)."""
         try:
-            self.sock.sendall((json.dumps(obj) + "\n").encode("utf-8"))
+            f = self.sock.makefile()
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+        except Exception:
+            pass
+        finally:
+            if self.connected:
+                self.root.after(0, self._disconnect)
+
+    # ── control helpers ───────────────────────────────────────────────────
+    def _send(self, payload: dict):
+        if not self.connected or self.sock is None:
+            return
+        try:
+            msg = json.dumps(payload) + "\n"
+            with self.send_lock:
+                self.sock.sendall(msg.encode("utf-8"))
         except Exception:
             self._disconnect()
 
-    def _recv_raw(self) -> dict | None:
-        if self.sock is None: return None
-        try:
-            buf = b""
-            while not buf.endswith(b"\n"):
-                chunk = self.sock.recv(4096)
-                if not chunk: return None
-                buf += chunk
-            return json.loads(buf.decode("utf-8").strip())
-        except Exception:
-            return None
+    def _on_zoom(self, _=None):
+        v = round(self.zoom_var.get(), 2)
+        self.lbl_zoom.config(text=f"{v:.1f}×")
+        self._send({"cmd": "zoom", "value": v})
 
-    def _cmd(self, obj: dict):
-        if not self.connected: return
-        with self.send_lock:
-            self._send_raw(obj)
-            self._recv_raw()  # consume response
+    def _set_zoom(self, v):
+        self.zoom_var.set(v)
+        self._on_zoom()
 
-    def _cmd_async(self, obj: dict):
-        threading.Thread(target=self._cmd, args=(obj,), daemon=True).start()
+    def _on_scale(self, _=None):
+        v = round(self.scale_var.get(), 2)
+        self.lbl_scale.config(text=f"{int(v*100)}%")
+        self._send({"cmd": "scale", "value": v})
 
-    # ── Controls ──────────────────────────────────────────────────────────
+    def _set_scale(self, v):
+        self.scale_var.set(v)
+        self._on_scale()
 
-    def _on_zoom(self, val):
-        z = round(float(val), 2)
-        self.lbl_zoom.config(text=f"{z:.1f}×")
-        self._cmd_async({"cmd": "zoom", "value": z})
+    def _pan(self, dx, dy):
+        self.pan_x = round(max(-1.0, min(1.0, self.pan_x + dx)), 3)
+        self.pan_y = round(max(-1.0, min(1.0, self.pan_y + dy)), 3)
+        self._send({"cmd": "pan", "x": self.pan_x, "y": self.pan_y})
 
-    def _set_zoom(self, val: float):
-        self.zoom_var.set(val)
-        self.lbl_zoom.config(text=f"{val:.1f}×")
-        self._cmd_async({"cmd": "zoom", "value": val})
-
-    def _on_scale(self, val):
-        s = round(float(val), 2)
-        self.lbl_scale.config(text=f"{int(s * 100)}%")
-        self._cmd_async({"cmd": "scale", "value": s})
-
-    def _set_scale(self, val: float):
-        self.scale_var.set(val)
-        self.lbl_scale.config(text=f"{int(val * 100)}%")
-        self._cmd_async({"cmd": "scale", "value": val})
-
-    def _pan(self, dx: int, dy: int):
-        step = self.pan_step.get()
-        self.pan_x += int(dx * step / 50)
-        self.pan_y += int(dy * step / 50)
-        self.lbl_pan.config(text=f"Pan: {self.pan_x}, {self.pan_y}")
-        self._cmd_async({"cmd": "pan", "x": self.pan_x, "y": self.pan_y})
-
-    def _pan_reset(self):
+    def _reset_pan(self):
         self.pan_x = 0; self.pan_y = 0
-        self.lbl_pan.config(text="Pan: 0, 0")
-        self._cmd_async({"cmd": "pan_reset"})
+        self._send({"cmd": "pan", "x": 0, "y": 0})
 
-    def _rotate_cw(self):
-        self.rotation = (self.rotation + 90) % 360
-        self.lbl_rot.config(text=f"{self.rotation}°")
-        self._cmd_async({"cmd": "rotate", "degrees": self.rotation})
-
-    def _rotate_ccw(self):
-        self.rotation = (self.rotation - 90) % 360
-        self.lbl_rot.config(text=f"{self.rotation}°")
-        self._cmd_async({"cmd": "rotate", "degrees": self.rotation})
+    def _rotate(self, deg):
+        self.rotation = (self.rotation + deg) % 360
+        self._send({"cmd": "rotate", "degrees": self.rotation})
 
     def _toggle_mirror(self):
         self.mirror_state = not self.mirror_state
-        if self.mirror_state:
-            self.btn_mirror.config(text="Mirror: ON", fg=ACCENT, bg=CARD)
-        else:
-            self.btn_mirror.config(text="Mirror: OFF", fg=FG2, bg="#21262d")
-        self._cmd_async({"cmd": "mirror", "enabled": self.mirror_state})
-
-    def _full_reset(self):
-        self.pan_x = 0; self.pan_y = 0
-        self.rotation = 0
-        self.mirror_state = False
-        self.zoom_var.set(1.0); self.lbl_zoom.config(text="1.0×")
-        self.scale_var.set(1.0); self.lbl_scale.config(text="100%")
-        self.lbl_pan.config(text="Pan: 0, 0")
-        self.lbl_rot.config(text="0°")
-        self.btn_mirror.config(text="Mirror: OFF", fg=FG2, bg="#21262d")
-        self._cmd_async({"cmd": "pan_reset"})
-        self._cmd_async({"cmd": "rotate", "degrees": 0})
-        self._cmd_async({"cmd": "mirror", "enabled": False})
+        label = "⇆ Mirror ON" if self.mirror_state else "⇆ Mirror OFF"
+        color = ACCENT if self.mirror_state else "#21262d"
+        self.btn_mirror.config(text=label, bg=color)
+        self._send({"cmd": "mirror", "enabled": self.mirror_state})
 
 
+# ── entry point ───────────────────────────────────────────────────────────
 def main():
     root = tk.Tk()
-    try:
-        from ctypes import windll
-        windll.shcore.SetProcessDpiAwareness(1)
-    except Exception:
-        pass
-    app = ConnectVcam(root)
+    app  = ConnectVcam(root)
     root.mainloop()
 
 
