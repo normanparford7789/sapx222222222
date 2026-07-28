@@ -101,8 +101,9 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install PyInstaller
-        run: pip install pyinstaller
+      - name: Install Python dependencies
+        working-directory: conect_vcam
+        run: pip install pyinstaller -r requirements.txt
 
       - name: Build Windows exe
         working-directory: conect_vcam
