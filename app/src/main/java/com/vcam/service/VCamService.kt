@@ -17,6 +17,7 @@ import kotlinx.coroutines.*
 import org.json.JSONObject
 import android.util.Base64
 import java.io.File
+import java.io.FileOutputStream
 
 class VCamService : Service() {
 
