@@ -10,6 +10,7 @@ a = Analysis(
     hiddenimports=[
         'tkinter', 'tkinter.ttk', 'tkinter.messagebox', 'tkinter.font',
         'mss', 'mss.windows', 'PIL', 'PIL.Image', 'PIL.JpegImagePlugin',
+        'obsws_python', 'obsws_python.reqs', 'obsws_python.baseclient', 'websocket',
     ],
     hookspath=[],
     hooksconfig={},
