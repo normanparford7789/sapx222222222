@@ -155,4 +155,14 @@
     <string name="active">نشط</string>
     <string name="inactive">معطّل</string>
     <string name="deactivate">تعطيل</string>
+
+    <!-- Unified main screen: live preview + dual-mode start -->
+    <string name="live_preview_title">معاينة البث المباشر</string>
+    <string name="live_preview_waiting">بانتظار بث من Bridg…</string>
+    <string name="live_preview_idle">فعّل الربط بالأعلى لعرض البث المباشر من Bridg</string>
+    <string name="live_preview_active">البث مباشر من Bridg</string>
+    <string name="start_bridge_mode">Start (Bridg)</string>
+    <string name="bridge_not_enabled_msg">فعّل الربط بالأعلى أولاً لاستخدام بث Bridg</string>
+    <string name="bridge_no_frames_yet">لا يوجد بث بعد — تأكد أن Bridg يعمل على الكمبيوتر</string>
+    <string name="bridge_injection_active">حقن Bridg مباشر — البث يعمل الآن</string>
 </resources>

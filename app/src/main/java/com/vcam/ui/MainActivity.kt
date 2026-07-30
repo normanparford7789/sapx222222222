@@ -1,8 +1,12 @@
 package com.vcam.ui
 
 import android.animation.ObjectAnimator
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -42,6 +46,9 @@ class MainActivity : AppCompatActivity() {
     private val viewModel: MainViewModel by viewModels()
     private var pendingSlot = 1
 
+    private var livePreviewReceiver: BroadcastReceiver? = null
+    private var lastFrameTime = 0L
+
     private val pickMedia = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri ?: return@registerForActivityResult
         val slot    = pendingSlot
@@ -79,6 +86,7 @@ class MainActivity : AppCompatActivity() {
         setupRotateButtons()
         setupStartStop()
         setupLinkSwitch()
+        setupLivePreview()
         requestPermissions()
         (1..8).forEach { refreshSlotUI(it) }
         binding.btnStartStop.isEnabled = MediaSlotManager.isSlotSet(this, 1)
@@ -97,6 +105,13 @@ class MainActivity : AppCompatActivity() {
             return
         }
         refreshLinkUI()
+        refreshLivePreviewUI()
+        registerLivePreviewReceiver()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        unregisterLivePreviewReceiver()
     }
 
     private fun goToLogin() {
@@ -116,7 +131,10 @@ class MainActivity : AppCompatActivity() {
             )
         }
         viewModel.isServiceRunning.observe(this) { running ->
-            binding.btnStartStop.text = if (running) getString(R.string.stop_vcam) else getString(R.string.start_vcam)
+            binding.btnStartStop.text = if (running) getString(R.string.stop_vcam) else {
+                if (ConnectServer.isEnabled(this)) getString(R.string.start_bridge_mode)
+                else getString(R.string.start_vcam)
+            }
             binding.btnStartStop.backgroundTintList = ContextCompat.getColorStateList(
                 this, if (running) R.color.color_stop else R.color.color_start
             )
@@ -245,7 +263,33 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun tryStartVCamService() {
-        if (!MediaSlotManager.isSlotSet(this, 1)) {
+        val bridgeEnabled = ConnectServer.isEnabled(this)
+        val hasLocalMedia = MediaSlotManager.isSlotSet(this, 1)
+
+        // Bridge mode: if the link is enabled, start injection directly from
+        // the live Bridg stream — no local media required.
+        if (bridgeEnabled) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                !Settings.canDrawOverlays(this)) {
+                MaterialAlertDialogBuilder(this)
+                    .setTitle(getString(R.string.overlay_permission_title))
+                    .setMessage(getString(R.string.overlay_permission_msg))
+                    .setPositiveButton(getString(R.string.grant)) { _, _ ->
+                        overlayPermLauncher.launch(
+                            Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:$packageName"))
+                        )
+                    }
+                    .setNegativeButton(R.string.skip) { _, _ -> doStartBridgeService() }
+                    .show()
+            } else {
+                doStartBridgeService()
+            }
+            return
+        }
+
+        // Local mode: fall back to the original local-media workflow.
+        if (!hasLocalMedia) {
             showSnack(getString(R.string.select_media_first))
             return
         }
@@ -280,6 +324,16 @@ class MainActivity : AppCompatActivity() {
         showSnack(getString(R.string.injection_active))
     }
 
+    private fun doStartBridgeService() {
+        val intent = Intent(this, VCamService::class.java).apply {
+            action = VCamService.ACTION_START_BRIDGE
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent)
+        else startService(intent)
+        viewModel.setServiceRunning(true)
+        showSnack(getString(R.string.bridge_injection_active))
+    }
+
     private fun stopVCamService() {
         startService(Intent(this, VCamService::class.java).apply { action = VCamService.ACTION_STOP })
         viewModel.setServiceRunning(false)
@@ -305,6 +359,7 @@ class MainActivity : AppCompatActivity() {
                 showSnack(getString(R.string.link_disabled_msg))
             }
             refreshLinkUI()
+            refreshLivePreviewUI()
         }
     }
 
@@ -344,4 +399,75 @@ class MainActivity : AppCompatActivity() {
 
     private fun showSnack(msg: String) =
         Snackbar.make(binding.root, msg, Snackbar.LENGTH_LONG).show()
+
+    // ── Live Preview (Bridg stream) ──────────────────────────────────────
+
+    private fun setupLivePreview() {
+        refreshLivePreviewUI()
+    }
+
+    private fun refreshLivePreviewUI() {
+        val bridgeEnabled = ConnectServer.isEnabled(this)
+        val placeholder = findViewById<LinearLayout>(R.id.layout_preview_placeholder)
+        val statusText  = findViewById<TextView>(R.id.tv_live_status)
+        val dot         = findViewById<View>(R.id.view_live_dot)
+
+        if (bridgeEnabled) {
+            placeholder?.visibility = View.GONE
+            statusText?.text = getString(R.string.live_preview_waiting)
+            statusText?.setTextColor(getColor(R.color.color_warning))
+            dot?.backgroundTintList = ContextCompat.getColorStateList(this, R.color.color_warning)
+        } else {
+            placeholder?.visibility = View.VISIBLE
+            findViewById<ImageView>(R.id.iv_live_preview)?.setImageBitmap(null)
+            statusText?.text = getString(R.string.live_preview_idle)
+            statusText?.setTextColor(getColor(R.color.color_text_hint))
+            dot?.backgroundTintList = ContextCompat.getColorStateList(this, R.color.color_text_hint)
+        }
+    }
+
+    private fun registerLivePreviewReceiver() {
+        if (livePreviewReceiver != null) return
+        livePreviewReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action == VCamService.ACTION_BRIDGE_FRAME) {
+                    val path = intent.getStringExtra(VCamService.EXTRA_FRAME_PATH) ?: return
+                    val now = System.currentTimeMillis()
+                    // Throttle UI updates to ~15 FPS to avoid jank on the main thread.
+                    if (now - lastFrameTime < 66) return
+                    lastFrameTime = now
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        val bmp = try { BitmapFactory.decodeFile(path) } catch (_: Exception) { null }
+                        if (bmp != null) {
+                            runOnUiThread {
+                                findViewById<ImageView>(R.id.iv_live_preview)?.setImageBitmap(bmp)
+                                findViewById<LinearLayout>(R.id.layout_preview_placeholder)
+                                    ?.visibility = View.GONE
+                                val status = findViewById<TextView>(R.id.tv_live_status)
+                                status?.text = getString(R.string.live_preview_active)
+                                status?.setTextColor(getColor(R.color.color_success))
+                                findViewById<View>(R.id.view_live_dot)
+                                    ?.backgroundTintList = ContextCompat.getColorStateList(
+                                        this@MainActivity, R.color.color_success)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        val filter = IntentFilter(VCamService.ACTION_BRIDGE_FRAME)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(livePreviewReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(livePreviewReceiver, filter)
+        }
+    }
+
+    private fun unregisterLivePreviewReceiver() {
+        livePreviewReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: Exception) {}
+            livePreviewReceiver = null
+        }
+    }
 }

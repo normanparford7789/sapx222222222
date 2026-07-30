@@ -27,6 +27,8 @@ class VCamService : Service() {
         const val ACTION_ENABLE_LINK    = "com.vcam.ACTION_ENABLE_LINK"
         const val ACTION_DISABLE_LINK   = "com.vcam.ACTION_DISABLE_LINK"
         const val ACTION_START_BRIDGE  = "com.vcam.ACTION_START_BRIDGE"
+        const val ACTION_BRIDGE_FRAME = "com.vcam.ACTION_BRIDGE_FRAME"
+        const val EXTRA_FRAME_PATH    = "extra_frame_path"
         const val EXTRA_MEDIA_URI       = "extra_media_uri"
         const val EXTRA_MEDIA_PATH      = "extra_media_path"
         const val EXTRA_TARGET_PACKAGE  = "extra_target_package"
@@ -188,7 +190,17 @@ class VCamService : Service() {
                     stopSelf()
                 }
             }
-            ACTION_START_BRIDGE -> startBridgeInjection()
+            ACTION_START_BRIDGE -> {
+                // Ensure the ConnectServer is running so Bridg frames can
+                // arrive, then auto-start injection on the first frame.
+                ConnectServer.setEnabled(this, true)
+                startConnectServer()
+                startForeground(
+                    NOTIFICATION_ID,
+                    buildNotification("OBS Bridge", false, "Waiting for Bridg frames…")
+                )
+                startBridgeInjection()
+            }
         }
         return START_STICKY
     }
@@ -325,6 +337,8 @@ class VCamService : Service() {
                     if (!temporary.renameTo(destination)) {
                         temporary.delete()
                     }
+                    sendBroadcast(Intent(ACTION_BRIDGE_FRAME)
+                        .putExtra(EXTRA_FRAME_PATH, destination.absolutePath))
                     if (!bridgeInjectionStarted) {
                         startBridgeInjection()
                     }
