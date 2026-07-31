@@ -199,7 +199,13 @@ class VCamService : Service() {
                     NOTIFICATION_ID,
                     buildNotification("OBS Bridge", false, "Waiting for Bridg frames…")
                 )
+                // Ensure the bridge frame file exists so the live-stream
+                // loop can start immediately; it shows nothing until the
+                // first real OBS frame arrives and is written to the file.
+                bridgeFrameFile.parentFile?.mkdirs()
+                if (!bridgeFrameFile.exists()) bridgeFrameFile.createNewFile()
                 startBridgeInjection()
+                if (Settings.canDrawOverlays(this)) startFloatWindow("OBS Bridge", false)
             }
         }
         return START_STICKY
