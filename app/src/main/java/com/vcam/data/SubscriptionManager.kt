@@ -184,30 +184,40 @@ object SubscriptionManager {
     // ── User Subscriptions ────────────────────────────────────────────────
 
     suspend fun getActiveSubscription(userId: String): ActiveSubscription? = withContext(Dispatchers.IO) {
-        runCatching {
-            val results = client.from("subscriptions").select {
-                filter {
-                    eq("user_id", userId)
-                    eq("status", "active")
-                }
-                order("created_at", Order.DESCENDING)
-                limit(1)
-            }.decodeList<ActiveSubscription>()
+        // First attempt — may fail silently if the auth token expired on this device
+        val firstAttempt = runCatching { queryActiveSubscription(userId) }
+        val firstResult = firstAttempt.getOrNull()
+        if (firstResult != null) return@withContext firstResult
 
-            val sub = results.firstOrNull() ?: return@runCatching null
+        // Token may have expired on this device — refresh the session and retry
+        val sessionRefreshed = AuthManager.refreshSession()
+        if (!sessionRefreshed) return@withContext null
 
-            // Check if expired
-            sub.expiresAt?.let { expiresAt ->
-                if (Instant.parse(expiresAt).isBefore(Instant.now())) {
-                    // Mark as expired
-                    client.from("subscriptions").update({
-                        set("status", "expired")
-                    }) { filter { eq("id", sub.id) } }
-                    return@runCatching null
-                }
+        runCatching { queryActiveSubscription(userId) }.getOrNull()
+    }
+
+    private suspend fun queryActiveSubscription(userId: String): ActiveSubscription? {
+        val results = client.from("subscriptions").select {
+            filter {
+                eq("user_id", userId)
+                eq("status", "active")
             }
-            sub
-        }.getOrNull()
+            order("created_at", Order.DESCENDING)
+            limit(1)
+        }.decodeList<ActiveSubscription>()
+
+        val sub = results.firstOrNull() ?: return null
+
+        // Check if expired
+        sub.expiresAt?.let { expiresAt ->
+            if (Instant.parse(expiresAt).isBefore(Instant.now())) {
+                client.from("subscriptions").update({
+                    set("status", "expired")
+                }) { filter { eq("id", sub.id) } }
+                return null
+            }
+        }
+        sub
     }
 
     suspend fun hasActiveSubscription(userId: String): Boolean {

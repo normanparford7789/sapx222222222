@@ -57,6 +57,18 @@ object AuthManager {
 
     fun isLoggedIn(): Boolean = client.auth.currentUserOrNull() != null
 
+    suspend fun refreshSession(): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            client.auth.refreshSession()
+            client.auth.currentUserOrNull() != null
+        }.getOrDefault(false)
+    }
+
+    suspend fun ensureValidSession(): Boolean {
+        if (isLoggedIn()) return true
+        return refreshSession()
+    }
+
     suspend fun getUserProfile(userId: String): UserProfile? = withContext(Dispatchers.IO) {
         runCatching {
             client.from("profiles").select {

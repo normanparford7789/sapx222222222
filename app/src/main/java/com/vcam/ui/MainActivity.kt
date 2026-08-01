@@ -237,13 +237,22 @@ class MainActivity : AppCompatActivity() {
                 // Check subscription before allowing start
                 lifecycleScope.launch {
                     val user = AuthManager.currentUser()
-                    if (user == null) { goToLogin(); return@launch }
-                    val hasSub = SubscriptionManager.hasActiveSubscription(user.id)
-                    runOnUiThread {
-                        if (hasSub) {
-                            tryStartVCamService()
-                        } else {
-                            showSubscriptionRequired()
+                    if (user == null) {
+                        val refreshed = AuthManager.refreshSession()
+                        val refreshedUser = AuthManager.currentUser()
+                        if (!refreshed || refreshedUser == null) { goToLogin(); return@launch }
+                        val hasSub = SubscriptionManager.hasActiveSubscription(refreshedUser.id)
+                        runOnUiThread {
+                            if (hasSub) tryStartVCamService() else showSubscriptionRequired()
+                        }
+                    } else {
+                        val hasSub = SubscriptionManager.hasActiveSubscription(user.id)
+                        runOnUiThread {
+                            if (hasSub) {
+                                tryStartVCamService()
+                            } else {
+                                showSubscriptionRequired()
+                            }
                         }
                     }
                 }
