@@ -110,14 +110,14 @@
     <!-- Plan strings -->
     <string name="permanent">دائم</string>
     <string name="days_format">%d يوم</string>
-    <string name="price_format">$%.2f %s</string>
+    <string name="price_format" formatted="false">$%.2f %s</string>
 
     <!-- Payment strings -->
     <string name="select_payment_method">يرجى اختيار طريقة الدفع</string>
     <string name="enter_transaction_number">يرجى إدخال رقم عملية التحويل</string>
     <string name="transfer_instructions_default">أرسل المبلغ المحدد إلى العنوان أعلاه، ثم أدخل رقم العملية</string>
     <string name="confirm_request">تأكيد الطلب</string>
-    <string name="confirm_request_msg">هل تريد إرسال طلب اشتراك لباقة %s برقم عملية: %s؟</string>
+    <string name="confirm_request_msg" formatted="false">هل تريد إرسال طلب اشتراك لباقة %s برقم عملية: %s؟</string>
     <string name="confirm">تأكيد</string>
     <string name="cancel">إلغاء</string>
     <string name="ok">حسناً</string>

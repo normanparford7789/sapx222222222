@@ -59,8 +59,12 @@ object AuthManager {
 
     suspend fun refreshSession(): Boolean = withContext(Dispatchers.IO) {
         runCatching {
-            client.auth.refreshSession()
-            client.auth.currentUserOrNull() != null
+            val session = client.auth.currentSessionOrNull()
+            if (session == null) false
+            else {
+                client.auth.refreshSession(session.refreshToken)
+                client.auth.currentUserOrNull() != null
+            }
         }.getOrDefault(false)
     }
 
