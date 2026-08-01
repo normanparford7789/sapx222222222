@@ -217,7 +217,7 @@ object SubscriptionManager {
                 return null
             }
         }
-        sub
+        return sub
     }
 
     suspend fun hasActiveSubscription(userId: String): Boolean {
