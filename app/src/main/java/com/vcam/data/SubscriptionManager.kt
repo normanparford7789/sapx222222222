@@ -154,6 +154,19 @@ object SubscriptionManager {
                     expiresAt = expiresAt
                 )
             )
+
+            // Verify the subscription was actually created (RLS can silently block inserts)
+            val created = client.from("subscriptions").select {
+                filter {
+                    eq("user_id", userId)
+                    eq("status", "active")
+                    eq("plan_id", planId)
+                }
+                order("created_at", Order.DESCENDING)
+                limit(1)
+            }.decodeList<ActiveSubscription>()
+
+            require(created.isNotEmpty()) { "Subscription insert was blocked by RLS — no row created" }
             Unit
         }
     }
@@ -240,6 +253,19 @@ object SubscriptionManager {
             client.from("subscriptions").insert(
                 NewSubscription(userId = userId, planId = planId, startsAt = now.toString(), expiresAt = expiresAt)
             )
+
+            // Verify the subscription was actually created (RLS can silently block inserts)
+            val created = client.from("subscriptions").select {
+                filter {
+                    eq("user_id", userId)
+                    eq("status", "active")
+                    eq("plan_id", planId)
+                }
+                order("created_at", Order.DESCENDING)
+                limit(1)
+            }.decodeList<ActiveSubscription>()
+
+            require(created.isNotEmpty()) { "Subscription insert was blocked by RLS — no row created" }
             Unit
         }
     }

@@ -142,13 +142,24 @@ DROP POLICY IF EXISTS "Admins can read all profiles"         ON public.profiles;
 DROP POLICY IF EXISTS "Admins can update profiles"           ON public.profiles;
 DROP POLICY IF EXISTS "Anyone can read active plans"         ON public.subscription_plans;
 DROP POLICY IF EXISTS "Admins manage plans"                  ON public.subscription_plans;
+DROP POLICY IF EXISTS "Admins can insert plans"             ON public.subscription_plans;
+DROP POLICY IF EXISTS "Admins can update plans"             ON public.subscription_plans;
+DROP POLICY IF EXISTS "Admins can delete plans"             ON public.subscription_plans;
 DROP POLICY IF EXISTS "Anyone can read active methods"       ON public.payment_methods;
 DROP POLICY IF EXISTS "Admins manage methods"                ON public.payment_methods;
+DROP POLICY IF EXISTS "Admins can insert methods"           ON public.payment_methods;
+DROP POLICY IF EXISTS "Admins can update methods"           ON public.payment_methods;
+DROP POLICY IF EXISTS "Admins can delete methods"           ON public.payment_methods;
 DROP POLICY IF EXISTS "Users can read own subscriptions"     ON public.subscriptions;
 DROP POLICY IF EXISTS "Admins manage subscriptions"          ON public.subscriptions;
+DROP POLICY IF EXISTS "Admins can insert subscriptions"     ON public.subscriptions;
+DROP POLICY IF EXISTS "Admins can update subscriptions"     ON public.subscriptions;
+DROP POLICY IF EXISTS "Admins can delete subscriptions"     ON public.subscriptions;
 DROP POLICY IF EXISTS "Users can read own requests"          ON public.subscription_requests;
 DROP POLICY IF EXISTS "Users can insert requests"            ON public.subscription_requests;
 DROP POLICY IF EXISTS "Admins manage requests"               ON public.subscription_requests;
+DROP POLICY IF EXISTS "Admins can update requests"           ON public.subscription_requests;
+DROP POLICY IF EXISTS "Admins can delete requests"           ON public.subscription_requests;
 
 -- Helper function: is current user admin?
 CREATE OR REPLACE FUNCTION public.is_admin()
@@ -182,8 +193,17 @@ CREATE POLICY "Anyone can read active plans"
     ON public.subscription_plans FOR SELECT
     USING (is_active = TRUE OR public.is_admin());
 
-CREATE POLICY "Admins manage plans"
-    ON public.subscription_plans FOR ALL
+CREATE POLICY "Admins can insert plans"
+    ON public.subscription_plans FOR INSERT
+    WITH CHECK (public.is_admin());
+
+CREATE POLICY "Admins can update plans"
+    ON public.subscription_plans FOR UPDATE
+    USING (public.is_admin())
+    WITH CHECK (public.is_admin());
+
+CREATE POLICY "Admins can delete plans"
+    ON public.subscription_plans FOR DELETE
     USING (public.is_admin());
 
 -- Payment methods policies
@@ -191,8 +211,17 @@ CREATE POLICY "Anyone can read active methods"
     ON public.payment_methods FOR SELECT
     USING (is_active = TRUE OR public.is_admin());
 
-CREATE POLICY "Admins manage methods"
-    ON public.payment_methods FOR ALL
+CREATE POLICY "Admins can insert methods"
+    ON public.payment_methods FOR INSERT
+    WITH CHECK (public.is_admin());
+
+CREATE POLICY "Admins can update methods"
+    ON public.payment_methods FOR UPDATE
+    USING (public.is_admin())
+    WITH CHECK (public.is_admin());
+
+CREATE POLICY "Admins can delete methods"
+    ON public.payment_methods FOR DELETE
     USING (public.is_admin());
 
 -- Subscriptions policies
@@ -200,8 +229,17 @@ CREATE POLICY "Users can read own subscriptions"
     ON public.subscriptions FOR SELECT
     USING (user_id = auth.uid() OR public.is_admin());
 
-CREATE POLICY "Admins manage subscriptions"
-    ON public.subscriptions FOR ALL
+CREATE POLICY "Admins can insert subscriptions"
+    ON public.subscriptions FOR INSERT
+    WITH CHECK (public.is_admin());
+
+CREATE POLICY "Admins can update subscriptions"
+    ON public.subscriptions FOR UPDATE
+    USING (public.is_admin())
+    WITH CHECK (public.is_admin());
+
+CREATE POLICY "Admins can delete subscriptions"
+    ON public.subscriptions FOR DELETE
     USING (public.is_admin());
 
 -- Subscription requests policies
@@ -213,8 +251,13 @@ CREATE POLICY "Users can insert requests"
     ON public.subscription_requests FOR INSERT
     WITH CHECK (user_id = auth.uid());
 
-CREATE POLICY "Admins manage requests"
-    ON public.subscription_requests FOR ALL
+CREATE POLICY "Admins can update requests"
+    ON public.subscription_requests FOR UPDATE
+    USING (public.is_admin())
+    WITH CHECK (public.is_admin());
+
+CREATE POLICY "Admins can delete requests"
+    ON public.subscription_requests FOR DELETE
     USING (public.is_admin());
 
 -- ─────────────────────────────────────────────────────────────────────
